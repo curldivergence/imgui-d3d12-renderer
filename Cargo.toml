@@ -1,0 +1,26 @@
+[package]
+name = "imgui-d3d12-renderer"
+version = "0.8.0"
+authors = ["Andrey Pushkar <andrey.s.pushkar@gmail.com>"]
+edition = "2021"
+description = "D3D12 renderer for the imgui crate based on rusty-d3d12 bindings"
+homepage = "https://github.com/curldivergence/imgui-d3d12-renderer"
+repository = "https://github.com/curldivergence/imgui-d3d12-renderer"
+license = "MIT"
+readme = "README.md"
+categories = ["gui", "rendering"]
+
+[dependencies]
+rusty-d3d12 = "0.2.3"
+imgui = "0.8"
+
+[build-dependencies]
+hassle-rs = "0.3"
+
+[dev-dependencies]
+imgui = "0.8"
+imgui-winit-support = "0.8"
+winit = "0.25"
+
+[package.metadata.docs.rs]
+default-target = "x86_64-pc-windows-msvc"
