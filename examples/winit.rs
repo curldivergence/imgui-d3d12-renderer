@@ -1,18 +1,5 @@
 use imgui::{im_str, FontConfig, FontSource};
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
-use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
-
-use winapi::shared::minwindef::TRUE;
-use winapi::shared::windef::HWND;
-use winapi::shared::winerror::S_OK;
-use winapi::Interface as _;
-
-use winapi::shared::dxgi::*;
-use winapi::shared::dxgiformat::*;
-use winapi::shared::dxgitype::*;
-
-use winapi::um::d3d11::*;
-use winapi::um::d3dcommon::*;
 
 use winit::{
     dpi::LogicalSize,
@@ -21,80 +8,16 @@ use winit::{
     window::WindowBuilder,
 };
 
-use wio::com::ComPtr;
+use rusty_d3d12::*;
 
-use std::ptr;
 use std::time::Instant;
 
 const WINDOW_WIDTH: f64 = 760.0;
 const WINDOW_HEIGHT: f64 = 760.0;
 
-unsafe fn create_device(
-    hwnd: HWND,
-) -> Option<(ComPtr<IDXGISwapChain>, ComPtr<ID3D11Device>, ComPtr<ID3D11DeviceContext>)> {
-    let sc_desc = DXGI_SWAP_CHAIN_DESC {
-        BufferDesc: DXGI_MODE_DESC {
-            Width: 0,
-            Height: 0,
-            RefreshRate: DXGI_RATIONAL { Numerator: 60, Denominator: 1 },
-            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-            ScanlineOrdering: 0,
-            Scaling: 0,
-        },
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-        BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-        BufferCount: 3,
-        OutputWindow: hwnd,
-        Windowed: TRUE,
-        SwapEffect: DXGI_SWAP_EFFECT_DISCARD,
-        Flags: DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH,
-    };
-
-    let mut swapchain = ptr::null_mut();
-    let mut device = ptr::null_mut();
-    let mut context = ptr::null_mut();
-
-    let mut feature_level = 0;
-    let feature_levels = [D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_10_0];
-    if D3D11CreateDeviceAndSwapChain(
-        ptr::null_mut(),
-        D3D_DRIVER_TYPE_HARDWARE,
-        ptr::null_mut(),
-        0,
-        feature_levels.as_ptr(),
-        feature_levels.len() as u32,
-        D3D11_SDK_VERSION,
-        &sc_desc,
-        &mut swapchain,
-        &mut device,
-        &mut feature_level,
-        &mut context,
-    ) != S_OK
-    {
-        None
-    } else {
-        Some((ComPtr::from_raw(swapchain), ComPtr::from_raw(device), ComPtr::from_raw(context)))
-    }
-}
-
-unsafe fn create_render_target(
-    swapchain: &ComPtr<IDXGISwapChain>,
-    device: &ComPtr<ID3D11Device>,
-) -> ComPtr<ID3D11RenderTargetView> {
-    let mut back_buffer = ptr::null_mut::<ID3D11Texture2D>();
-    let mut main_rtv = ptr::null_mut();
-    swapchain.GetBuffer(
-        0,
-        &ID3D11Resource::uuidof(),
-        &mut back_buffer as *mut *mut _ as *mut *mut _,
-    );
-    device.CreateRenderTargetView(back_buffer.cast(), ptr::null_mut(), &mut main_rtv);
-    (&*back_buffer).Release();
-    ComPtr::from_raw(main_rtv)
-}
 
 fn main() {
-    let command_args = clap::App::new("InterprocessCommunicationSample")
+    let command_args = clap::App::new("ImGUI D3D12 Example")
     .arg(
         clap::Arg::with_name("breakonerr")
             .short("b")
@@ -108,12 +31,18 @@ fn main() {
             .help("Verbosity level"),
     )
     .arg(
-        clap::Arg::with_name("primary")
-            .short("p")
+        clap::Arg::with_name("debug")
+            .short("d")
             .takes_value(false)
-            .help("Defines if current instance is the primary one"),
+            .help("Use D3D debug layers"),
     )
     .get_matches();
+
+    match command_args.occurrences_of("v") {
+        0 => log_level = log::Level::Debug,
+        1 | _ => log_level = log::Level::Trace,
+    };
+
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()

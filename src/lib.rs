@@ -1,104 +1,99 @@
 #![cfg(windows)]
-#![deny(missing_docs)]
-#![allow(clippy::drop_copy)] // we use it for discarding defer closures, makes it look nicer as a one liner
-// #![no_std]
-//! This crate offers a DirectX 11 renderer for the [imgui-rs](https://docs.rs/imgui/*/imgui/) rust bindings.
 
 use imgui::internal::RawWrapper;
 use imgui::{
     BackendFlags, DrawCmd, DrawCmdParams, DrawData, DrawIdx, DrawVert, TextureId, Textures,
 };
-
-use winapi::Interface;
-
-use winapi::shared::minwindef::{FALSE, TRUE};
-use winapi::shared::winerror::{self, HRESULT};
-
-use winapi::shared::dxgi::*;
-use winapi::shared::dxgiformat::*;
-use winapi::shared::dxgitype::*;
-
-use winapi::um::d3d11::*;
-use winapi::um::d3dcommon::*;
-
-use wio::com::ComPtr;
+use log::info;
 
 use core::num::NonZeroI32;
 use core::ptr;
 use core::slice;
 use core::{mem, ops};
 
+use rusty_d3d12::*;
+
+use thiserror::Error;
+
+// IDR is for imgui-d3d12-renderer
+#[derive(Error, Debug)]
+pub enum IDRError {}
+
+pub type IDRResult<T> = Result<T, IDRError>;
+
 const FONT_TEX_ID: usize = !0;
 
 const VERTEX_BUF_ADD_CAPACITY: usize = 5000;
 const INDEX_BUF_ADD_CAPACITY: usize = 10000;
-
-const DXGI_ERROR_INVALID_CALL: NonZeroI32 =
-    unsafe { NonZeroI32::new_unchecked(winerror::DXGI_ERROR_INVALID_CALL) };
-
-/// The result type returned by this library. It's a simple wrapper around
-/// window's hresult.
-pub type HResult<T> = core::result::Result<T, NonZeroI32>;
-
-fn hresult(code: HRESULT) -> HResult<()> {
-    match NonZeroI32::new(code) {
-        Some(err) => Err(err),
-        None => Ok(()),
-    }
-}
-
-unsafe fn com_ptr_from_fn<T, F>(fun: F) -> HResult<ComPtr<T>>
-where
-    T: Interface,
-    F: FnOnce(&mut *mut T) -> HRESULT,
-{
-    let mut ptr = ptr::null_mut();
-    let res = fun(&mut ptr);
-    hresult(res).map(|()| ComPtr::from_raw(ptr))
-}
-
-unsafe fn com_ref_cast<T, U>(com_ptr: &ComPtr<T>) -> &ComPtr<U>
-where
-    T: ops::Deref<Target = U>,
-    U: Interface,
-{
-    &*(com_ptr as *const _ as *const _)
-}
 
 #[repr(C)]
 struct VertexConstantBuffer {
     mvp: [[f32; 4]; 4],
 }
 
-/// A DirectX 11 renderer for (Imgui-rs)[https://docs.rs/imgui/*/imgui/].
+/// A D3D12 renderer for (Imgui-rs)[https://docs.rs/imgui/*/imgui/].
 #[derive(Debug)]
 pub struct Renderer {
-    device: ComPtr<ID3D11Device>,
-    context: ComPtr<ID3D11DeviceContext>,
-    factory: ComPtr<IDXGIFactory>,
-    vertex_shader: ComPtr<ID3D11VertexShader>,
-    pixel_shader: ComPtr<ID3D11PixelShader>,
-    input_layout: ComPtr<ID3D11InputLayout>,
-    constant_buffer: ComPtr<ID3D11Buffer>,
-    blend_state: ComPtr<ID3D11BlendState>,
-    rasterizer_state: ComPtr<ID3D11RasterizerState>,
-    depth_stencil_state: ComPtr<ID3D11DepthStencilState>,
-    font_resource_view: ComPtr<ID3D11ShaderResourceView>,
-    font_sampler: ComPtr<ID3D11SamplerState>,
-    vertex_buffer: Buffer,
-    index_buffer: Buffer,
-    textures: Textures<ComPtr<ID3D11ShaderResourceView>>,
+    // device: ComPtr<ID3D11Device>,
+// context: ComPtr<ID3D11DeviceContext>,
+// factory: ComPtr<IDXGIFactory>,
+// vertex_shader: ComPtr<ID3D11VertexShader>,
+// pixel_shader: ComPtr<ID3D11PixelShader>,
+// input_layout: ComPtr<ID3D11InputLayout>,
+// constant_buffer: ComPtr<ID3D11Buffer>,
+// blend_state: ComPtr<ID3D11BlendState>,
+// rasterizer_state: ComPtr<ID3D11RasterizerState>,
+// depth_stencil_state: ComPtr<ID3D11DepthStencilState>,
+// font_resource_view: ComPtr<ID3D11ShaderResourceView>,
+// font_sampler: ComPtr<ID3D11SamplerState>,
+// vertex_buffer: Buffer,
+// index_buffer: Buffer,
+// textures: Textures<ComPtr<ID3D11ShaderResourceView>>,
+}
+
+fn create_device(factory: &Factory) -> IDRResult<Device> {
+    let adapter;
+    adapter = get_hardware_adapter(factory);
+
+    let adapter_desc = adapter.get_desc().expect("Cannot get adapter desc");
+
+    info!("Enumerated adapter: \n\t{}", adapter_desc,);
+    (
+        Device::new(&adapter)
+            .unwrap_or_else(|_| panic!("Cannot create device on adapter {}", adapter_desc)),
+        adapter_desc.is_software(),
+    )
+}
+
+fn get_hardware_adapter(factory: &Factory, adapter_index: usi) -> Adapter {
+    let mut adapters = factory
+        .enum_adapters_by_gpu_preference(GpuPreference::HighPerformance)
+        .expect("Cannot enumerate adapters");
+
+    for adapter in &adapters {
+        let desc = adapter.get_desc().expect("Cannot get adapter desc");
+        info!("found adapter: {}", desc);
+    }
+    adapters.remove(0)
 }
 
 impl Renderer {
-    /// Creates a new renderer for the given [`ID3D11Device`].
-    ///
-    /// # Safety
-    ///
-    /// `device` must be a valid [`ID3D11Device`] pointer.
-    ///
-    /// [`ID3D11Device`]: https://docs.rs/winapi/0.3/x86_64-pc-windows-msvc/winapi/um/d3d11/struct.ID3D11Device.html
-    pub unsafe fn new(im_ctx: &mut imgui::Context, device: ComPtr<ID3D11Device>) -> HResult<Self> {
+    pub fn new(
+        im_ctx: &mut imgui::Context,
+        adapter_index: usize,
+        use_debug: bool,
+    ) -> IDRResult<Self> {
+        let mut factory_flags = CreateFactoryFlags::None;
+        if use_debug {
+            let debug_controller = Debug::new()?;
+            debug_controller.enable_debug_layer();
+            debug_controller.enable_gpu_based_validation();
+            debug_controller.enable_object_auto_name();
+            factory_flags = CreateFactoryFlags::Debug;
+        }
+
+        let factory = Factory::new(factory_flags)?;
+
         Self::acquire_factory(&device).and_then(|factory| {
             let (vertex_shader, input_layout, constant_buffer) =
                 Self::create_vertex_shader(&device)?;
@@ -115,10 +110,9 @@ impl Renderer {
                 ComPtr::from_raw(context)
             };
             im_ctx.io_mut().backend_flags |= BackendFlags::RENDERER_HAS_VTX_OFFSET;
-            im_ctx.set_renderer_name(Some(concat!(
-                "imgui_dx11_renderer@",
-                env!("CARGO_PKG_VERSION")
-            ).to_owned()));
+            im_ctx.set_renderer_name(Some(
+                concat!("imgui_dx11_renderer@", env!("CARGO_PKG_VERSION")).to_owned(),
+            ));
 
             Ok(Renderer {
                 device,
@@ -259,11 +253,11 @@ impl Renderer {
                             vertex_offset as i32,
                         );
                         index_offset += count;
-                    },
+                    }
                     DrawCmd::ResetRenderState => self.setup_render_state(draw_data),
                     DrawCmd::RawCallback { callback, raw_cmd } => {
                         callback(draw_list.raw(), raw_cmd)
-                    },
+                    }
                 }
             }
             vertex_offset += draw_list.vtx_buffer().len();

@@ -1,4 +1,4 @@
-# imgui-dx11-renderer
+<!-- # imgui-dx11-renderer
 
 [![Documentation](https://docs.rs/imgui-dx11-renderer/badge.svg)](https://docs.rs/imgui-dx11-renderer)
 [![Version](https://img.shields.io/crates/v/imgui-dx11-renderer.svg)](https://crates.io/crates/imgui-dx11-renderer)
@@ -37,4 +37,4 @@ themselves or look into the source itself.
 
 ## License
 
-Licensed under the MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+Licensed under the MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT) -->
