@@ -158,16 +158,10 @@ fn create_input_layout() -> Vec<InputElementDesc<'static>> {
 }
 
 fn setup_root_signature(device: &Device) -> IDRResult<RootSignature> {
-    let ranges = [
-        DescriptorRange::default()
-            .set_range_type(DescriptorRangeType::Cbv)
-            .set_num_descriptors(1)
-            .set_flags(DescriptorRangeFlags::DataVolatile),
-        DescriptorRange::default()
-            .set_range_type(DescriptorRangeType::Srv)
-            .set_num_descriptors(1)
-            .set_flags(DescriptorRangeFlags::DataVolatile),
-    ];
+    let ranges = [DescriptorRange::default()
+        .set_range_type(DescriptorRangeType::Srv)
+        .set_num_descriptors(1)
+        .set_flags(DescriptorRangeFlags::DataVolatile)];
 
     let static_sampler_desc = StaticSamplerDesc::default()
         .set_filter(Filter::MinMagMipLinear)
@@ -180,9 +174,14 @@ fn setup_root_signature(device: &Device) -> IDRResult<RootSignature> {
 
     let descriptor_table = RootDescriptorTable::default().set_descriptor_ranges(&ranges);
 
-    let root_parameters = vec![RootParameter::default()
-        .new_descriptor_table(&descriptor_table)
-        .set_shader_visibility(ShaderVisibility::All)];
+    let root_parameters = [
+        RootParameter::default()
+            .new_constants(&RootConstants::default().set_num_32_bit_values(16))
+            .set_shader_visibility(ShaderVisibility::Vertex),
+        RootParameter::default()
+            .new_descriptor_table(&descriptor_table)
+            .set_shader_visibility(ShaderVisibility::All),
+    ];
     let root_signature_desc = VersionedRootSignatureDesc::default().set_desc_1_1(
         &RootSignatureDesc::default()
             .set_parameters(&root_parameters)
@@ -291,9 +290,8 @@ fn upload_texture(
 fn create_vertex_buffer(
     device: &Device,
     vertex_count: usize,
-) -> IDRResult<(Resource, VertexBufferView)> {
-    let vertex_buffer_size =
-        Bytes::from((vertex_count + VERTEX_BUF_ADD_CAPACITY) * size_of!(DrawVert));
+) -> IDRResult<(Resource, VertexBufferView, *mut u8)> {
+    let vertex_buffer_size = (vertex_count + VERTEX_BUF_ADD_CAPACITY) * size_of!(DrawVert);
 
     let vertex_buffer = device.create_committed_resource(
         &HeapProperties::default().set_heap_type(HeapType::Upload),
@@ -306,21 +304,23 @@ fn create_vertex_buffer(
         None,
     )?;
 
-    vertex_buffer.set_name("ImGUI vertex buffer");
+    vertex_buffer.set_name("ImGUI vertex buffer")?;
 
     let vertex_buffer_view = VertexBufferView::default()
         .set_buffer_location(vertex_buffer.get_gpu_virtual_address())
         .set_size_in_bytes(vertex_buffer_size)
         .set_stride_in_bytes(Bytes::from(std::mem::size_of::<DrawVert>()));
 
-    Ok((vertex_buffer, vertex_buffer_view))
+    let mapped_data = vertex_buffer.map(0, None)?;
+
+    Ok((vertex_buffer, vertex_buffer_view, mapped_data))
 }
 
 fn create_index_buffer(
     device: &Device,
     index_count: usize,
-) -> IDRResult<(Resource, IndexBufferView)> {
-    let index_buffer_size = Bytes::from((index_count + INDEX_BUF_ADD_CAPACITY) * size_of!(DrawIdx));
+) -> IDRResult<(Resource, IndexBufferView, *mut u8)> {
+    let index_buffer_size = (index_count + INDEX_BUF_ADD_CAPACITY) * size_of!(DrawIdx);
 
     let index_buffer = device.create_committed_resource(
         &HeapProperties::default().set_heap_type(HeapType::Upload),
@@ -333,7 +333,7 @@ fn create_index_buffer(
         None,
     )?;
 
-    index_buffer.set_name("ImGUI index buffer");
+    index_buffer.set_name("ImGUI index buffer")?;
 
     let index_buffer_view = IndexBufferView::default()
         .set_buffer_location(index_buffer.get_gpu_virtual_address())
@@ -344,7 +344,9 @@ fn create_index_buffer(
             _ => return Err(IDRError::WrongIndexSize),
         });
 
-    Ok((index_buffer, index_buffer_view))
+    let mapped_data = index_buffer.map(0, None)?;
+
+    Ok((index_buffer, index_buffer_view, mapped_data))
 }
 
 fn create_gpu_handle_from_texture_id(handle_size: u32, id: TextureId) -> GpuDescriptorHandle {
@@ -358,24 +360,29 @@ fn create_gpu_handle_from_texture_id(handle_size: u32, id: TextureId) -> GpuDesc
 struct FrameResources {
     vertex_buffer: Resource,
     vertex_buffer_view: VertexBufferView,
+    vertex_buffer_data: *mut u8,
     vertex_count: usize,
 
     index_buffer: Resource,
     index_buffer_view: IndexBufferView,
+    index_buffer_data: *mut u8,
     index_count: usize,
 }
 
 impl FrameResources {
     fn new(device: &Device, vertex_count: usize, index_count: usize) -> IDRResult<Self> {
-        let (vertex_buffer, vertex_buffer_view) = create_vertex_buffer(device, 0)?;
-        let (index_buffer, index_buffer_view) = create_index_buffer(device, 0)?;
+        let (vertex_buffer, vertex_buffer_view, vertex_buffer_data) =
+            create_vertex_buffer(device, 0)?;
+        let (index_buffer, index_buffer_view, index_buffer_data) = create_index_buffer(device, 0)?;
 
         Ok(Self {
             vertex_buffer,
             vertex_buffer_view,
+            vertex_buffer_data,
             vertex_count,
             index_buffer,
             index_buffer_view,
+            index_buffer_data,
             index_count,
         })
     }
@@ -387,6 +394,7 @@ pub struct Renderer {
     frame_count: usize,
     current_frame_index: usize,
     frame_resources: Vec<FrameResources>,
+    root_signature: RootSignature,
     pipeline_state: PipelineState,
     font_tex_cpu_descriptor_handle: CpuDescriptorHandle,
     font_tex_gpu_descriptor_handle: GpuDescriptorHandle,
@@ -434,6 +442,7 @@ impl Renderer {
             frame_count,
             current_frame_index: 0,
             frame_resources,
+            root_signature,
             pipeline_state,
             font_tex_cpu_descriptor_handle,
             font_tex_gpu_descriptor_handle,
@@ -468,8 +477,8 @@ impl Renderer {
 
         // let _state_guard = StateBackup::backup(&self.context);
 
-        self.update_buffers(draw_data)?;
-        self.setup_render_state(draw_data);
+        self.update_buffers(draw_data, command_list)?;
+        self.setup_render_state(draw_data, command_list);
         self.render_impl(draw_data, command_list)?;
 
         Ok(())
@@ -484,8 +493,6 @@ impl Renderer {
         let mut last_tex =
             TextureId::from(self.font_tex_gpu_descriptor_handle.hw_handle.ptr as usize);
         command_list.set_graphics_root_descriptor_table(0, self.font_tex_gpu_descriptor_handle);
-
-        let current_resources = &self.frame_resources[self.current_frame_index];
 
         for draw_list in draw_data.draw_lists() {
             for cmd in draw_list.commands() {
@@ -506,24 +513,24 @@ impl Renderer {
                             last_tex = texture_id;
                         }
 
-                        let rect = Rect(D3D12_RECT {
+                        let scissor_rect = Rect(D3D12_RECT {
                             left: ((clip_rect[0] - clip_off[0]) * clip_scale[0]) as i32,
                             top: ((clip_rect[1] - clip_off[1]) * clip_scale[1]) as i32,
                             right: ((clip_rect[2] - clip_off[0]) * clip_scale[0]) as i32,
                             bottom: ((clip_rect[3] - clip_off[1]) * clip_scale[1]) as i32,
                         });
 
-                        command_list.set_scissor_rects(slice::from_ref(&rect));
+                        command_list.set_scissor_rects(slice::from_ref(&scissor_rect));
                         command_list.draw_indexed_instanced(
                             count as u32,
                             1,
                             index_offset as u32,
                             vertex_offset as i32,
-                            0
+                            0,
                         );
                         index_offset += count;
                     }
-                    DrawCmd::ResetRenderState => self.setup_render_state(draw_data),
+                    DrawCmd::ResetRenderState => self.setup_render_state(draw_data, command_list),
                     DrawCmd::RawCallback { callback, raw_cmd } => unsafe {
                         callback(draw_list.raw(), raw_cmd)
                     },
@@ -534,100 +541,21 @@ impl Renderer {
         Ok(())
     }
 
-    fn setup_render_state(&self, draw_data: &DrawData) {
-        let ctx = &*self.context;
+    fn setup_render_state(&self, draw_data: &DrawData, command_list: &CommandList) {
+        let current_resources = &self.frame_resources[self.current_frame_index];
 
-        let vp = D3D11_VIEWPORT {
+        let viewport = Viewport(D3D12_VIEWPORT {
             TopLeftX: 0.0,
             TopLeftY: 0.0,
             Width: draw_data.display_size[0] * draw_data.framebuffer_scale[0],
             Height: draw_data.display_size[1] * draw_data.framebuffer_scale[1],
             MinDepth: 0.0,
             MaxDepth: 1.0,
-        };
-        ctx.RSSetViewports(1, &vp);
+        });
 
-        let stride = mem::size_of::<DrawVert>() as u32;
-        ctx.IASetInputLayout(self.input_layout.as_raw());
-        ctx.IASetVertexBuffers(0, 1, &self.vertex_buffer.as_raw(), &stride, &0);
-        ctx.IASetIndexBuffer(
-            self.index_buffer.as_raw(),
-            if mem::size_of::<DrawIdx>() == 2 {
-                DXGI_FORMAT_R16_UINT
-            } else {
-                DXGI_FORMAT_R32_UINT
-            },
-            0,
-        );
-        ctx.IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        ctx.VSSetShader(self.vertex_shader.as_raw(), ptr::null(), 0);
-        ctx.VSSetConstantBuffers(0, 1, &self.constant_buffer.as_raw());
-        ctx.PSSetShader(self.pixel_shader.as_raw(), ptr::null(), 0);
-        ctx.PSSetSamplers(0, 1, &self.font_sampler.as_raw());
-        ctx.GSSetShader(ptr::null_mut(), ptr::null(), 0);
-        ctx.HSSetShader(ptr::null_mut(), ptr::null(), 0);
-        ctx.DSSetShader(ptr::null_mut(), ptr::null(), 0);
-        ctx.CSSetShader(ptr::null_mut(), ptr::null(), 0);
-
-        let blend_factor = [0.0; 4];
-        ctx.OMSetBlendState(self.blend_state.as_raw(), &blend_factor, 0xFFFFFFFF);
-        ctx.OMSetDepthStencilState(self.depth_stencil_state.as_raw(), 0);
-        ctx.RSSetState(self.rasterizer_state.as_raw());
-    }
-
-    fn update_buffers(&self, draw_data: &DrawData) -> HResult<()> {
-        let mut vtx_resource = mem::MaybeUninit::zeroed();
-        let mut idx_resource = mem::MaybeUninit::zeroed();
-        hresult(self.context.Map(
-            self.vertex_buffer.as_raw().cast(),
-            0,
-            D3D11_MAP_WRITE_DISCARD,
-            0,
-            vtx_resource.as_mut_ptr(),
-        ))?;
-        if let e @ Err(_) = hresult(self.context.Map(
-            self.index_buffer.as_raw().cast(),
-            0,
-            D3D11_MAP_WRITE_DISCARD,
-            0,
-            idx_resource.as_mut_ptr(),
-        )) {
-            self.context.Unmap(self.vertex_buffer.as_raw().cast(), 0);
-            e?;
-        }
-        let vtx_resource = vtx_resource.assume_init();
-        let idx_resource = idx_resource.assume_init();
-
-        let mut vtx_dst = slice::from_raw_parts_mut(
-            vtx_resource.pData.cast::<DrawVert>(),
-            draw_data.total_vtx_count as usize,
-        );
-        let mut idx_dst = slice::from_raw_parts_mut(
-            idx_resource.pData.cast::<DrawIdx>(),
-            draw_data.total_idx_count as usize,
-        );
-        for (vbuf, ibuf) in
-            draw_data.draw_lists().map(|draw_list| (draw_list.vtx_buffer(), draw_list.idx_buffer()))
-        {
-            vtx_dst[..vbuf.len()].copy_from_slice(vbuf);
-            idx_dst[..ibuf.len()].copy_from_slice(ibuf);
-            vtx_dst = &mut vtx_dst[vbuf.len()..];
-            idx_dst = &mut idx_dst[ibuf.len()..];
-        }
-
-        self.context.Unmap(self.vertex_buffer.as_raw().cast(), 0);
-        self.context.Unmap(self.index_buffer.as_raw().cast(), 0);
-
-        // constant buffer
-        let mut mapped_resource = mem::MaybeUninit::zeroed();
-        hresult(self.context.Map(
-            com_ref_cast(&self.constant_buffer).as_raw(),
-            0,
-            D3D11_MAP_WRITE_DISCARD,
-            0,
-            mapped_resource.as_mut_ptr(),
-        ))?;
-        let mapped_resource = mapped_resource.assume_init();
+        command_list.set_viewports(slice::from_ref(&viewport));
+        command_list.set_vertex_buffers(0, slice::from_ref(&current_resources.vertex_buffer_view));
+        command_list.set_primitive_topology(PrimitiveTopology::TriangleList);
 
         let l = draw_data.display_pos[0];
         let r = draw_data.display_pos[0] + draw_data.display_size[0];
@@ -639,156 +567,50 @@ impl Renderer {
             [0.0, 0.0, 0.5, 0.0],
             [(r + l) / (l - r), (t + b) / (b - t), 0.5, 1.0],
         ];
-        *mapped_resource.pData.cast::<VertexConstantBuffer>() = VertexConstantBuffer { mvp };
-        self.context.Unmap(com_ref_cast(&self.constant_buffer).as_raw(), 0);
+        let constant_buffer_data = VertexConstantBuffer { mvp };
+        let data_view = unsafe {
+            slice::from_raw_parts(
+                &constant_buffer_data as *const VertexConstantBuffer as *const u32,
+                std::mem::size_of::<VertexConstantBuffer>() / std::mem::size_of::<u32>(),
+            )
+        };
+        command_list.set_graphics_root_32bit_constants(0, data_view, 0);
+
+        command_list.set_graphics_root_signature(&self.root_signature);
+        command_list.set_pipeline_state(&self.pipeline_state);
+
+        command_list.set_blend_factor([0., 0., 0., 0.]);
+    }
+
+    fn update_buffers(&self, draw_data: &DrawData, command_list: &CommandList) -> IDRResult<()> {
+        let mut current_vb_data = self.frame_resources[self.current_frame_index].vertex_buffer_data;
+        let mut current_ib_data = self.frame_resources[self.current_frame_index].index_buffer_data;
+
+        for (imgui_vb, imgui_ib) in
+            draw_data.draw_lists().map(|draw_list| (draw_list.vtx_buffer(), draw_list.idx_buffer()))
+        {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    imgui_vb.as_ptr() as *mut u8,
+                    current_vb_data,
+                    imgui_vb.len() * std::mem::size_of::<DrawVert>(),
+                );
+
+                current_vb_data =
+                    current_vb_data.add(imgui_vb.len() * std::mem::size_of::<DrawVert>());
+
+                std::ptr::copy_nonoverlapping(
+                    imgui_ib.as_ptr() as *mut u8,
+                    current_ib_data,
+                    imgui_ib.len() * std::mem::size_of::<DrawIdx>(),
+                );
+
+                current_ib_data =
+                    current_ib_data.add(imgui_ib.len() * std::mem::size_of::<DrawIdx>());
+            }
+        }
+
         Ok(())
-    }
-
-    fn create_vertex_shader(
-        device: &ComPtr<ID3D11Device>,
-    ) -> HResult<(ComPtr<ID3D11VertexShader>, ComPtr<ID3D11InputLayout>, ComPtr<ID3D11Buffer>)>
-    {
-        const VERTEX_SHADER: &[u8] =
-            include_bytes!(concat!(env!("OUT_DIR"), "/vertex_shader.vs_4_0"));
-        let vs_shader = com_ptr_from_fn(|vs_shader| {
-            device.CreateVertexShader(
-                VERTEX_SHADER.as_ptr().cast(),
-                VERTEX_SHADER.len(),
-                ptr::null_mut(),
-                vs_shader,
-            )
-        })?;
-
-        let local_layout = [
-            D3D11_INPUT_ELEMENT_DESC {
-                SemanticName: "POSITION\0".as_ptr().cast(),
-                SemanticIndex: 0,
-                Format: DXGI_FORMAT_R32G32_FLOAT,
-                InputSlot: 0,
-                AlignedByteOffset: 0,
-                InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
-                InstanceDataStepRate: 0,
-            },
-            D3D11_INPUT_ELEMENT_DESC {
-                SemanticName: "TEXCOORD\0".as_ptr().cast(),
-                SemanticIndex: 0,
-                Format: DXGI_FORMAT_R32G32_FLOAT,
-                InputSlot: 0,
-                AlignedByteOffset: 8,
-                InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
-                InstanceDataStepRate: 0,
-            },
-            D3D11_INPUT_ELEMENT_DESC {
-                SemanticName: "COLOR\0".as_ptr().cast(),
-                SemanticIndex: 0,
-                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-                InputSlot: 0,
-                AlignedByteOffset: 16,
-                InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
-                InstanceDataStepRate: 0,
-            },
-        ];
-
-        let input_layout = com_ptr_from_fn(|input_layout| {
-            device.CreateInputLayout(
-                local_layout.as_ptr(),
-                local_layout.len() as _,
-                VERTEX_SHADER.as_ptr().cast(),
-                VERTEX_SHADER.len(),
-                input_layout,
-            )
-        })?;
-
-        let desc = D3D11_BUFFER_DESC {
-            ByteWidth: mem::size_of::<VertexConstantBuffer>() as _,
-            Usage: D3D11_USAGE_DYNAMIC,
-            BindFlags: D3D11_BIND_CONSTANT_BUFFER,
-            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE,
-            MiscFlags: 0,
-            StructureByteStride: 0,
-        };
-        let vertex_constant_buffer = com_ptr_from_fn(|vertex_constant_buffer| {
-            device.CreateBuffer(&desc, ptr::null_mut(), vertex_constant_buffer)
-        })?;
-        Ok((vs_shader, input_layout, vertex_constant_buffer))
-    }
-
-    fn create_pixel_shader(device: &ComPtr<ID3D11Device>) -> HResult<ComPtr<ID3D11PixelShader>> {
-        const PIXEL_SHADER: &[u8] =
-            include_bytes!(concat!(env!("OUT_DIR"), "/pixel_shader.ps_4_0"));
-
-        let ps_shader = com_ptr_from_fn(|ps_shader| {
-            device.CreatePixelShader(
-                PIXEL_SHADER.as_ptr().cast(),
-                PIXEL_SHADER.len(),
-                ptr::null_mut(),
-                ps_shader,
-            )
-        })?;
-        Ok(ps_shader)
-    }
-
-    fn create_device_objects(
-        device: &ComPtr<ID3D11Device>,
-    ) -> HResult<(
-        ComPtr<ID3D11BlendState>,
-        ComPtr<ID3D11RasterizerState>,
-        ComPtr<ID3D11DepthStencilState>,
-    )> {
-        let mut desc = D3D11_BLEND_DESC {
-            AlphaToCoverageEnable: FALSE,
-            IndependentBlendEnable: FALSE,
-            RenderTarget: mem::zeroed(),
-        };
-        desc.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC {
-            BlendEnable: TRUE,
-            SrcBlend: D3D11_BLEND_SRC_ALPHA,
-            DestBlend: D3D11_BLEND_INV_SRC_ALPHA,
-            BlendOp: D3D11_BLEND_OP_ADD,
-            SrcBlendAlpha: D3D11_BLEND_INV_DEST_ALPHA,
-            DestBlendAlpha: D3D11_BLEND_ONE,
-            BlendOpAlpha: D3D11_BLEND_OP_ADD,
-            RenderTargetWriteMask: D3D11_COLOR_WRITE_ENABLE_ALL as u8,
-        };
-        let blend_state =
-            com_ptr_from_fn(|blend_state| device.CreateBlendState(&desc, blend_state))?;
-
-        let desc = D3D11_RASTERIZER_DESC {
-            FillMode: D3D11_FILL_SOLID,
-            CullMode: D3D11_CULL_NONE,
-            FrontCounterClockwise: 0,
-            DepthBias: 0,
-            DepthBiasClamp: 0.0,
-            SlopeScaledDepthBias: 0.0,
-            DepthClipEnable: TRUE,
-            ScissorEnable: TRUE,
-            MultisampleEnable: 0,
-            AntialiasedLineEnable: 0,
-        };
-        let rasterizer_state = com_ptr_from_fn(|rasterizer_state| {
-            device.CreateRasterizerState(&desc, rasterizer_state)
-        })?;
-
-        let stencil_op_desc = D3D11_DEPTH_STENCILOP_DESC {
-            StencilFailOp: D3D11_STENCIL_OP_KEEP,
-            StencilDepthFailOp: D3D11_STENCIL_OP_KEEP,
-            StencilPassOp: D3D11_STENCIL_OP_KEEP,
-            StencilFunc: D3D11_COMPARISON_ALWAYS,
-        };
-        let desc = D3D11_DEPTH_STENCIL_DESC {
-            DepthEnable: FALSE,
-            DepthWriteMask: D3D11_DEPTH_WRITE_MASK_ALL,
-            DepthFunc: D3D11_COMPARISON_ALWAYS,
-            StencilEnable: FALSE,
-            StencilReadMask: 0,
-            StencilWriteMask: 0,
-            FrontFace: stencil_op_desc,
-            BackFace: stencil_op_desc,
-        };
-        let depth_stencil_state = com_ptr_from_fn(|depth_stencil_state| {
-            device.CreateDepthStencilState(&desc, depth_stencil_state)
-        })?;
-        Ok((blend_state, rasterizer_state, depth_stencil_state))
     }
 }
 
