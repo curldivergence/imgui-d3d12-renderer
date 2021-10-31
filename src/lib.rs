@@ -18,11 +18,14 @@ use thiserror::Error;
 
 // IDR is for imgui-d3d12-renderer
 #[derive(Error, Debug)]
-pub enum IDRError {}
+pub enum IDRError {
+    #[error("wrong index size")]
+    WrongIndexSize,
+    #[error("D3D12 error: {}", .0)]
+    D3d12Error(#[from] DxError),
+}
 
 pub type IDRResult<T> = Result<T, IDRError>;
-
-const FONT_TEX_ID: usize = !0;
 
 const VERTEX_BUF_ADD_CAPACITY: usize = 5000;
 const INDEX_BUF_ADD_CAPACITY: usize = 10000;
@@ -30,26 +33,6 @@ const INDEX_BUF_ADD_CAPACITY: usize = 10000;
 #[repr(C)]
 struct VertexConstantBuffer {
     mvp: [[f32; 4]; 4],
-}
-
-/// A D3D12 renderer for (Imgui-rs)[https://docs.rs/imgui/*/imgui/].
-#[derive(Debug)]
-pub struct Renderer {
-    // device: ComPtr<ID3D11Device>,
-// context: ComPtr<ID3D11DeviceContext>,
-// factory: ComPtr<IDXGIFactory>,
-// vertex_shader: ComPtr<ID3D11VertexShader>,
-// pixel_shader: ComPtr<ID3D11PixelShader>,
-// input_layout: ComPtr<ID3D11InputLayout>,
-// constant_buffer: ComPtr<ID3D11Buffer>,
-// blend_state: ComPtr<ID3D11BlendState>,
-// rasterizer_state: ComPtr<ID3D11RasterizerState>,
-// depth_stencil_state: ComPtr<ID3D11DepthStencilState>,
-// font_resource_view: ComPtr<ID3D11ShaderResourceView>,
-// font_sampler: ComPtr<ID3D11SamplerState>,
-// vertex_buffer: Buffer,
-// index_buffer: Buffer,
-// textures: Textures<ComPtr<ID3D11ShaderResourceView>>,
 }
 
 fn create_shaders() -> IDRResult<(Vec<u8>, Vec<u8>)> {
@@ -107,8 +90,7 @@ float4 main(PS_INPUT input): SV_Target {
         "ps_6_0",
         &[],
         &[],
-    )
-    .expect("Cannot compile pixel shader")?;
+    )?;
 
     Ok((vertex_shader, pixel_shader))
 }
@@ -148,7 +130,7 @@ fn create_pipeline_state(
         .set_rtv_formats(&[Format::R8G8B8A8_UNorm])
         .set_dsv_format(Format::D32_Float);
 
-    device.create_graphics_pipeline_state(&pso_desc)
+    device.create_graphics_pipeline_state(&pso_desc).map_err(|err| err.into())
 }
 
 fn create_input_layout() -> Vec<InputElementDesc<'static>> {
@@ -212,46 +194,33 @@ fn setup_root_signature(device: &Device) -> IDRResult<RootSignature> {
         RootSignature::serialize_versioned(&root_signature_desc);
     assert!(serialization_result.is_ok(), "Result: {}", &serialization_result.err().unwrap());
 
-    device.create_root_signature(0, &ShaderBytecode::from_bytes(serialized_signature.get_buffer()))
+    device
+        .create_root_signature(0, &ShaderBytecode::from_bytes(serialized_signature.get_buffer()))
+        .map_err(|err| err.into())
 }
 
 fn create_font_texture(
     mut fonts: imgui::FontAtlasRefMut<'_>,
     device: &Device,
     font_tex_cpu_descriptor_handle: CpuDescriptorHandle,
-)
-//-> IDRResult<(ComPtr<ID3D11ShaderResourceView>, ComPtr<ID3D11SamplerState>)> {
-{
+    font_tex_gpu_descriptor_handle: GpuDescriptorHandle,
+) -> IDRResult<()> {
     let fa_tex = fonts.build_rgba32_texture();
 
     let texture_desc = ResourceDesc::default()
         .set_dimension(ResourceDimension::Texture2D)
-        .set_width(fa_tex.width)
+        .set_width(fa_tex.width as u64)
         .set_height(fa_tex.height)
         .set_mip_levels(1)
         .set_format(Format::R8G8B8A8_UNorm);
 
-    let (staging_resource, texture_resource) = upload_texture(device, &texture_desc, fa_tex.data);
+    let (staging_resource, texture_resource) = upload_texture(device, &texture_desc, fa_tex.data)?;
 
     device.create_shader_resource_view(&texture_resource, None, font_tex_cpu_descriptor_handle);
 
-    fonts.tex_id = TextureId::from(FONT_TEX_ID);
+    fonts.tex_id = TextureId::from(font_tex_gpu_descriptor_handle.hw_handle.ptr as usize);
 
-    let desc = D3D11_SAMPLER_DESC {
-        Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-        AddressU: D3D11_TEXTURE_ADDRESS_WRAP,
-        AddressV: D3D11_TEXTURE_ADDRESS_WRAP,
-        AddressW: D3D11_TEXTURE_ADDRESS_WRAP,
-        MipLODBias: 0.0,
-        MaxAnisotropy: 0,
-        ComparisonFunc: D3D11_COMPARISON_ALWAYS,
-        BorderColor: [0.0; 4],
-        MinLOD: 0.0,
-        MaxLOD: 0.0,
-    };
-    let font_sampler =
-        com_ptr_from_fn(|font_sampler| device.CreateSamplerState(&desc, font_sampler))?;
-    Ok((font_texture_view, font_sampler))
+    Ok(())
 }
 
 fn upload_texture(
@@ -292,7 +261,7 @@ fn upload_texture(
     let command_allocator = device.create_command_allocator(CommandListType::Direct)?;
 
     let command_list =
-        device.create_command_list(CommandListType::Dirce, &command_allocator, None)?;
+        device.create_command_list(CommandListType::Direct, &command_allocator, None)?;
 
     let mut fence_value = 0;
     let fence = device.create_fence(fence_value, FenceFlags::None)?;
@@ -319,34 +288,142 @@ fn upload_texture(
     Ok((staging_resource, texture_resource))
 }
 
+fn create_vertex_buffer(
+    device: &Device,
+    vertex_count: usize,
+) -> IDRResult<(Resource, VertexBufferView)> {
+    let vertex_buffer_size =
+        Bytes::from((vertex_count + VERTEX_BUF_ADD_CAPACITY) * size_of!(DrawVert));
+
+    let vertex_buffer = device.create_committed_resource(
+        &HeapProperties::default().set_heap_type(HeapType::Upload),
+        HeapFlags::None,
+        &ResourceDesc::default()
+            .set_dimension(ResourceDimension::Buffer)
+            .set_layout(TextureLayout::RowMajor)
+            .set_width(vertex_buffer_size.0),
+        ResourceStates::Common,
+        None,
+    )?;
+
+    vertex_buffer.set_name("ImGUI vertex buffer");
+
+    let vertex_buffer_view = VertexBufferView::default()
+        .set_buffer_location(vertex_buffer.get_gpu_virtual_address())
+        .set_size_in_bytes(vertex_buffer_size)
+        .set_stride_in_bytes(Bytes::from(std::mem::size_of::<DrawVert>()));
+
+    Ok((vertex_buffer, vertex_buffer_view))
+}
+
+fn create_index_buffer(
+    device: &Device,
+    index_count: usize,
+) -> IDRResult<(Resource, IndexBufferView)> {
+    let index_buffer_size = Bytes::from((index_count + INDEX_BUF_ADD_CAPACITY) * size_of!(DrawIdx));
+
+    let index_buffer = device.create_committed_resource(
+        &HeapProperties::default().set_heap_type(HeapType::Upload),
+        HeapFlags::None,
+        &ResourceDesc::default()
+            .set_dimension(ResourceDimension::Buffer)
+            .set_layout(TextureLayout::RowMajor)
+            .set_width(index_buffer_size.0),
+        ResourceStates::Common,
+        None,
+    )?;
+
+    index_buffer.set_name("ImGUI index buffer");
+
+    let index_buffer_view = IndexBufferView::default()
+        .set_buffer_location(index_buffer.get_gpu_virtual_address())
+        .set_size_in_bytes(index_count * size_of!(DrawIdx))
+        .set_format(match size_of!(DrawIdx) {
+            Bytes(2) => Format::R16_UInt,
+            Bytes(4) => Format::R32_UInt,
+            _ => return Err(IDRError::WrongIndexSize),
+        });
+
+    Ok((index_buffer, index_buffer_view))
+}
+
+fn create_gpu_handle_from_texture_id(handle_size: u32, id: TextureId) -> GpuDescriptorHandle {
+    GpuDescriptorHandle {
+        hw_handle: D3D12_GPU_DESCRIPTOR_HANDLE { ptr: id.id() as u64 },
+        handle_size,
+    }
+}
+
+#[derive(Debug)]
+struct FrameResources {
+    vertex_buffer: Resource,
+    vertex_buffer_view: VertexBufferView,
+    vertex_count: usize,
+
+    index_buffer: Resource,
+    index_buffer_view: IndexBufferView,
+    index_count: usize,
+}
+
+impl FrameResources {
+    fn new(device: &Device, vertex_count: usize, index_count: usize) -> IDRResult<Self> {
+        let (vertex_buffer, vertex_buffer_view) = create_vertex_buffer(device, 0)?;
+        let (index_buffer, index_buffer_view) = create_index_buffer(device, 0)?;
+
+        Ok(Self {
+            vertex_buffer,
+            vertex_buffer_view,
+            vertex_count,
+            index_buffer,
+            index_buffer_view,
+            index_count,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct Renderer {
+    device: Device,
+    frame_count: usize,
+    current_frame_index: usize,
+    frame_resources: Vec<FrameResources>,
+    pipeline_state: PipelineState,
+    font_tex_cpu_descriptor_handle: CpuDescriptorHandle,
+    font_tex_gpu_descriptor_handle: GpuDescriptorHandle,
+    textures: Textures<GpuDescriptorHandle>,
+}
+
 impl Renderer {
     pub fn new(
         im_ctx: &mut imgui::Context,
-        device: &Device,
+        device: Device,
         frame_count: usize,
         font_tex_cpu_descriptor_handle: CpuDescriptorHandle,
         font_tex_gpu_descriptor_handle: GpuDescriptorHandle,
     ) -> IDRResult<Self> {
-        let (vertex_shader, pixel_shader) = create_shaders();
+        let (vertex_shader, pixel_shader) = create_shaders()?;
 
         let input_layout = create_input_layout();
-        let root_signature = setup_root_signature(device);
+        let root_signature = setup_root_signature(&device)?;
         let pipeline_state = create_pipeline_state(
             input_layout,
             &root_signature,
             vertex_shader,
             pixel_shader,
-            device,
-        );
+            &device,
+        )?;
 
-        let (font_resource_view, font_sampler) = create_font_texture(im_ctx.fonts(), &device)?;
-        let vertex_buffer = Self::create_vertex_buffer(&device, 0)?;
-        let index_buffer = Self::create_index_buffer(&device, 0)?;
-        let context = {
-            let mut context = ptr::null_mut();
-            device.GetImmediateContext(&mut context);
-            ComPtr::from_raw(context)
-        };
+        create_font_texture(
+            im_ctx.fonts(),
+            &device,
+            font_tex_cpu_descriptor_handle,
+            font_tex_gpu_descriptor_handle,
+        )?;
+
+        let frame_resources: Vec<FrameResources> = (0..frame_count)
+            .map(|idx| FrameResources::new(&device, 0, 0))
+            .collect::<IDRResult<Vec<_>>>()?;
+
         im_ctx.io_mut().backend_flags |= BackendFlags::RENDERER_HAS_VTX_OFFSET;
         im_ctx.set_renderer_name(Some(
             concat!("imgui_d3d12_renderer@", env!("CARGO_PKG_VERSION")).to_owned(),
@@ -354,75 +431,62 @@ impl Renderer {
 
         Ok(Renderer {
             device,
-            context,
-            factory,
-            vertex_shader,
-            pixel_shader,
-            input_layout,
-            constant_buffer,
-            blend_state,
-            rasterizer_state,
-            depth_stencil_state,
-            font_resource_view,
-            font_sampler,
-            vertex_buffer,
-            index_buffer,
+            frame_count,
+            current_frame_index: 0,
+            frame_resources,
+            pipeline_state,
+            font_tex_cpu_descriptor_handle,
+            font_tex_gpu_descriptor_handle,
             textures: Textures::new(),
         })
     }
 
-    // /// The textures registry of this renderer.
-    // ///
-    // /// The texture slot at !0 is reserved for the font texture, therefore the
-    // /// renderer will ignore any texture inserted into said slot.
-    // #[inline]
-    // pub fn textures_mut(&mut self) -> &mut Textures<ComPtr<ID3D11ShaderResourceView>> {
-    //     &mut self.textures
-    // }
+    pub fn textures_mut(&mut self) -> &mut Textures<GpuDescriptorHandle> {
+        &mut self.textures
+    }
 
-    /// The textures registry of this renderer.
-    // #[inline]
-    // pub fn textures(&self) -> &Textures<ComPtr<ID3D11ShaderResourceView>> {
-    //     &self.textures
-    // }
+    pub fn textures(&self) -> &Textures<GpuDescriptorHandle> {
+        &self.textures
+    }
 
-    /// Renders the given [`Ui`] with this renderer.
-    ///
-    /// Should the [`DrawData`] contain an invalid texture index the renderer
-    /// will return `DXGI_ERROR_INVALID_CALL` and immediately stop rendering.
-    ///
-    /// [`Ui`]: https://docs.rs/imgui/*/imgui/struct.Ui.html
-    pub fn render(&mut self, draw_data: &DrawData) -> HResult<()> {
+    pub fn render(&mut self, draw_data: &DrawData, command_list: &CommandList) -> IDRResult<()> {
         if draw_data.display_size[0] <= 0.0 || draw_data.display_size[1] <= 0.0 {
             return Ok(());
         }
 
-        unsafe {
-            if self.vertex_buffer.len() < draw_data.total_vtx_count as usize {
-                self.vertex_buffer =
-                    Self::create_vertex_buffer(&self.device, draw_data.total_vtx_count as usize)?;
-            }
-            if self.index_buffer.len() < draw_data.total_idx_count as usize {
-                self.index_buffer =
-                    Self::create_index_buffer(&self.device, draw_data.total_idx_count as usize)?;
-            }
-
-            let _state_guard = StateBackup::backup(&self.context);
-
-            self.write_buffers(draw_data)?;
-            self.setup_render_state(draw_data);
-            self.render_impl(draw_data)?;
+        if self.frame_resources[self.current_frame_index].vertex_count
+            < draw_data.total_vtx_count as usize
+            || self.frame_resources[self.current_frame_index].index_count
+                < draw_data.total_idx_count as usize
+        {
+            self.frame_resources[self.current_frame_index] = FrameResources::new(
+                &self.device,
+                draw_data.total_vtx_count as usize,
+                draw_data.total_idx_count as usize,
+            )?;
         }
+
+        // let _state_guard = StateBackup::backup(&self.context);
+
+        self.update_buffers(draw_data)?;
+        self.setup_render_state(draw_data);
+        self.render_impl(draw_data, command_list)?;
+
         Ok(())
     }
 
-    unsafe fn render_impl(&self, draw_data: &DrawData) -> HResult<()> {
+    fn render_impl(&self, draw_data: &DrawData, command_list: &CommandList) -> IDRResult<()> {
         let clip_off = draw_data.display_pos;
         let clip_scale = draw_data.framebuffer_scale;
         let mut vertex_offset = 0;
         let mut index_offset = 0;
-        let mut last_tex = TextureId::from(FONT_TEX_ID);
-        self.context.PSSetShaderResources(0, 1, &self.font_resource_view.as_raw());
+
+        let mut last_tex =
+            TextureId::from(self.font_tex_gpu_descriptor_handle.hw_handle.ptr as usize);
+        command_list.set_graphics_root_descriptor_table(0, self.font_tex_gpu_descriptor_handle);
+
+        let current_resources = &self.frame_resources[self.current_frame_index];
+
         for draw_list in draw_data.draw_lists() {
             for cmd in draw_list.commands() {
                 match cmd {
@@ -431,33 +495,38 @@ impl Renderer {
                         cmd_params: DrawCmdParams { clip_rect, texture_id, .. },
                     } => {
                         if texture_id != last_tex {
-                            let texture = if texture_id.id() == FONT_TEX_ID {
-                                &self.font_resource_view
-                            } else {
-                                self.textures.get(texture_id).ok_or(DXGI_ERROR_INVALID_CALL)?
-                            };
-                            self.context.PSSetShaderResources(0, 1, &texture.as_raw());
+                            command_list.set_graphics_root_descriptor_table(
+                                0,
+                                create_gpu_handle_from_texture_id(
+                                    self.font_tex_gpu_descriptor_handle.handle_size,
+                                    texture_id,
+                                ),
+                            );
+
                             last_tex = texture_id;
                         }
 
-                        let r = D3D11_RECT {
+                        let rect = Rect(D3D12_RECT {
                             left: ((clip_rect[0] - clip_off[0]) * clip_scale[0]) as i32,
                             top: ((clip_rect[1] - clip_off[1]) * clip_scale[1]) as i32,
                             right: ((clip_rect[2] - clip_off[0]) * clip_scale[0]) as i32,
                             bottom: ((clip_rect[3] - clip_off[1]) * clip_scale[1]) as i32,
-                        };
-                        self.context.RSSetScissorRects(1, &r);
-                        self.context.DrawIndexed(
+                        });
+
+                        command_list.set_scissor_rects(slice::from_ref(&rect));
+                        command_list.draw_indexed_instanced(
                             count as u32,
+                            1,
                             index_offset as u32,
                             vertex_offset as i32,
+                            0
                         );
                         index_offset += count;
                     }
                     DrawCmd::ResetRenderState => self.setup_render_state(draw_data),
-                    DrawCmd::RawCallback { callback, raw_cmd } => {
+                    DrawCmd::RawCallback { callback, raw_cmd } => unsafe {
                         callback(draw_list.raw(), raw_cmd)
-                    }
+                    },
                 }
             }
             vertex_offset += draw_list.vtx_buffer().len();
@@ -465,7 +534,7 @@ impl Renderer {
         Ok(())
     }
 
-    unsafe fn setup_render_state(&self, draw_data: &DrawData) {
+    fn setup_render_state(&self, draw_data: &DrawData) {
         let ctx = &*self.context;
 
         let vp = D3D11_VIEWPORT {
@@ -506,41 +575,7 @@ impl Renderer {
         ctx.RSSetState(self.rasterizer_state.as_raw());
     }
 
-    unsafe fn create_vertex_buffer(
-        device: &ComPtr<ID3D11Device>,
-        vtx_count: usize,
-    ) -> HResult<Buffer> {
-        let len = vtx_count + VERTEX_BUF_ADD_CAPACITY;
-        let desc = D3D11_BUFFER_DESC {
-            ByteWidth: (len * mem::size_of::<DrawVert>()) as u32,
-            Usage: D3D11_USAGE_DYNAMIC,
-            BindFlags: D3D11_BIND_VERTEX_BUFFER,
-            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE,
-            MiscFlags: 0,
-            StructureByteStride: 0,
-        };
-        com_ptr_from_fn(|vertex_buffer| device.CreateBuffer(&desc, ptr::null(), vertex_buffer))
-            .map(|vb| Buffer(vb, len))
-    }
-
-    unsafe fn create_index_buffer(
-        device: &ComPtr<ID3D11Device>,
-        idx_count: usize,
-    ) -> HResult<Buffer> {
-        let len = idx_count + INDEX_BUF_ADD_CAPACITY;
-        let desc = D3D11_BUFFER_DESC {
-            ByteWidth: (len * mem::size_of::<DrawIdx>()) as u32,
-            Usage: D3D11_USAGE_DYNAMIC,
-            BindFlags: D3D11_BIND_INDEX_BUFFER,
-            CPUAccessFlags: D3D11_CPU_ACCESS_WRITE,
-            MiscFlags: 0,
-            StructureByteStride: 0,
-        };
-        com_ptr_from_fn(|index_buffer| device.CreateBuffer(&desc, ptr::null(), index_buffer))
-            .map(|ib| Buffer(ib, len))
-    }
-
-    unsafe fn write_buffers(&self, draw_data: &DrawData) -> HResult<()> {
+    fn update_buffers(&self, draw_data: &DrawData) -> HResult<()> {
         let mut vtx_resource = mem::MaybeUninit::zeroed();
         let mut idx_resource = mem::MaybeUninit::zeroed();
         hresult(self.context.Map(
@@ -609,7 +644,7 @@ impl Renderer {
         Ok(())
     }
 
-    unsafe fn create_vertex_shader(
+    fn create_vertex_shader(
         device: &ComPtr<ID3D11Device>,
     ) -> HResult<(ComPtr<ID3D11VertexShader>, ComPtr<ID3D11InputLayout>, ComPtr<ID3D11Buffer>)>
     {
@@ -678,9 +713,7 @@ impl Renderer {
         Ok((vs_shader, input_layout, vertex_constant_buffer))
     }
 
-    unsafe fn create_pixel_shader(
-        device: &ComPtr<ID3D11Device>,
-    ) -> HResult<ComPtr<ID3D11PixelShader>> {
+    fn create_pixel_shader(device: &ComPtr<ID3D11Device>) -> HResult<ComPtr<ID3D11PixelShader>> {
         const PIXEL_SHADER: &[u8] =
             include_bytes!(concat!(env!("OUT_DIR"), "/pixel_shader.ps_4_0"));
 
@@ -695,7 +728,7 @@ impl Renderer {
         Ok(ps_shader)
     }
 
-    unsafe fn create_device_objects(
+    fn create_device_objects(
         device: &ComPtr<ID3D11Device>,
     ) -> HResult<(
         ComPtr<ID3D11BlendState>,
@@ -759,40 +792,7 @@ impl Renderer {
     }
 }
 
-#[derive(Debug)]
-struct Buffer(ComPtr<ID3D11Buffer>, usize);
-
-impl Buffer {
-    #[inline]
-    fn len(&self) -> usize {
-        self.1
-    }
-
-    #[inline]
-    fn as_raw(&self) -> *mut ID3D11Buffer {
-        self.0.as_raw()
-    }
-}
-
-unsafe fn com_ptr_from_fn_opt<T, F>(fun: F) -> Option<ComPtr<T>>
-where
-    T: Interface,
-    F: FnOnce(&mut *mut T),
-{
-    let mut ptr = ptr::null_mut();
-    fun(&mut ptr);
-    match ptr.is_null() {
-        true => None,
-        false => Some(ComPtr::from_raw(ptr)),
-    }
-}
-
-type OptComPtr<T> = Option<ComPtr<T>>;
-
-#[inline]
-fn opt_com_ptr_as_raw<T>(ptr: &OptComPtr<T>) -> *mut T {
-    ptr.as_ref().map(ComPtr::as_raw).unwrap_or_else(ptr::null_mut)
-}
+/*
 
 struct StateBackup<'ctx> {
     context: &'ctx ID3D11DeviceContext,
@@ -961,3 +961,5 @@ impl Drop for StateBackup<'_> {
         }
     }
 }
+
+*/
