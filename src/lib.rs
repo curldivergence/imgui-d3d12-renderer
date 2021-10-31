@@ -4,7 +4,7 @@ use imgui::internal::RawWrapper;
 use imgui::{
     BackendFlags, DrawCmd, DrawCmdParams, DrawData, DrawIdx, DrawVert, TextureId, Textures,
 };
-use log::info;
+use log::{info, trace, warn};
 use memoffset::offset_of;
 
 use core::num::NonZeroI32;
@@ -193,9 +193,12 @@ fn setup_root_signature(device: &Device) -> IDRResult<RootSignature> {
         RootSignature::serialize_versioned(&root_signature_desc);
     assert!(serialization_result.is_ok(), "Result: {}", &serialization_result.err().unwrap());
 
-    device
-        .create_root_signature(0, &ShaderBytecode::from_bytes(serialized_signature.get_buffer()))
-        .map_err(|err| err.into())
+    let root_signature = device
+        .create_root_signature(0, &ShaderBytecode::from_bytes(serialized_signature.get_buffer()))?;
+
+    root_signature.set_name("ImGUI Root Signature")?;
+
+    Ok(root_signature)
 }
 
 fn create_font_texture(
@@ -203,7 +206,7 @@ fn create_font_texture(
     device: &Device,
     font_tex_cpu_descriptor_handle: CpuDescriptorHandle,
     font_tex_gpu_descriptor_handle: GpuDescriptorHandle,
-) -> IDRResult<()> {
+) -> IDRResult<(Resource, Resource)> {
     let fa_tex = fonts.build_rgba32_texture();
 
     let texture_desc = ResourceDesc::default()
@@ -219,7 +222,7 @@ fn create_font_texture(
 
     fonts.tex_id = TextureId::from(font_tex_gpu_descriptor_handle.hw_handle.ptr as usize);
 
-    Ok(())
+    Ok((staging_resource, texture_resource))
 }
 
 fn upload_texture(
@@ -227,30 +230,6 @@ fn upload_texture(
     texture_desc: &ResourceDesc,
     init_data: &[u8],
 ) -> IDRResult<(Resource, Resource)> {
-    let staging_resource = device.create_committed_resource(
-        &HeapProperties::default().set_heap_type(HeapType::Upload),
-        HeapFlags::None,
-        texture_desc,
-        ResourceStates::CopySource,
-        None,
-    )?;
-
-    let staging_data = staging_resource.map(0, None)?;
-
-    unsafe {
-        std::ptr::copy_nonoverlapping(init_data.as_ptr(), staging_data, init_data.len());
-    }
-
-    staging_resource.unmap(0, None);
-
-    let texture_resource = device.create_committed_resource(
-        &HeapProperties::default().set_heap_type(HeapType::Default),
-        HeapFlags::None,
-        texture_desc,
-        ResourceStates::CopyDest,
-        None,
-    )?;
-
     let command_queue = device.create_command_queue(
         &CommandQueueDesc::default()
             .set_queue_type(CommandListType::Direct)
@@ -266,7 +245,53 @@ fn upload_texture(
     let fence = device.create_fence(fence_value, FenceFlags::None)?;
     let event = Win32Event::default();
 
-    command_list.copy_resource(&texture_resource, &staging_resource);
+    let staging_buffer_desc = ResourceDesc::default()
+        .set_dimension(ResourceDimension::Buffer)
+        .set_layout(TextureLayout::RowMajor)
+        .set_width(texture_desc.width() * texture_desc.height() as u64 * 4); // RGBA8
+
+    let staging_buffer = device.create_committed_resource(
+        &HeapProperties::default().set_heap_type(HeapType::Upload),
+        HeapFlags::None,
+        &staging_buffer_desc,
+        ResourceStates::GenericRead,
+        None,
+    )?;
+
+    let staging_data = staging_buffer.map(0, None)?;
+
+    unsafe {
+        std::ptr::copy_nonoverlapping(init_data.as_ptr(), staging_data, init_data.len());
+    }
+
+    staging_buffer.unmap(0, None);
+
+    let texture_resource = device.create_committed_resource(
+        &HeapProperties::default().set_heap_type(HeapType::Default),
+        HeapFlags::None,
+        texture_desc,
+        ResourceStates::CopyDest,
+        None,
+    )?;
+
+    let source_location = TextureCopyLocation::new_placed_footprint(
+        &staging_buffer,
+        PlacedSubresourceFootprint::default().set_offset(Bytes(0)).set_footprint(
+            SubresourceFootprint::default()
+                .set_width(texture_desc.width() as u32)
+                .set_height(texture_desc.height())
+                .set_depth(1)
+                .set_format(Format::R8G8B8A8_UNorm)
+                .set_row_pitch(Bytes(align_to_multiple(
+                    texture_desc.width() as u64 * 4,
+                    TEXTURE_DATA_PITCH_ALIGNMENT.0,
+                ))),
+        ),
+    );
+
+    let dest_location = TextureCopyLocation::new_subresource_index(&texture_resource, 0);
+
+    command_list.copy_texture_region(dest_location, 0, 0, 0, source_location, None);
 
     command_list.resource_barrier(std::slice::from_ref(&ResourceBarrier::new_transition(
         &ResourceTransitionBarrier::default()
@@ -279,12 +304,14 @@ fn upload_texture(
     command_queue.execute_command_lists(slice::from_ref(&command_list));
 
     fence_value += 1;
-    command_queue.signal(&fence, fence_value);
+    command_queue.signal(&fence, fence_value)?;
 
-    fence.set_event_on_completion(fence_value, &event);
+    fence.set_event_on_completion(fence_value, &event)?;
     event.wait(None);
 
-    Ok((staging_resource, texture_resource))
+    info!("uploaded font texture");
+
+    Ok((staging_buffer, texture_resource))
 }
 
 fn create_vertex_buffer(
@@ -300,7 +327,7 @@ fn create_vertex_buffer(
             .set_dimension(ResourceDimension::Buffer)
             .set_layout(TextureLayout::RowMajor)
             .set_width(vertex_buffer_size.0),
-        ResourceStates::Common,
+        ResourceStates::GenericRead,
         None,
     )?;
 
@@ -329,7 +356,7 @@ fn create_index_buffer(
             .set_dimension(ResourceDimension::Buffer)
             .set_layout(TextureLayout::RowMajor)
             .set_width(index_buffer_size.0),
-        ResourceStates::Common,
+        ResourceStates::GenericRead,
         None,
     )?;
 
@@ -396,6 +423,8 @@ pub struct Renderer {
     frame_resources: Vec<FrameResources>,
     root_signature: RootSignature,
     pipeline_state: PipelineState,
+    staging_resource: Resource,
+    texture_resource: Resource,
     font_tex_cpu_descriptor_handle: CpuDescriptorHandle,
     font_tex_gpu_descriptor_handle: GpuDescriptorHandle,
     textures: Textures<GpuDescriptorHandle>,
@@ -421,7 +450,7 @@ impl Renderer {
             &device,
         )?;
 
-        create_font_texture(
+        let (staging_resource, texture_resource) = create_font_texture(
             im_ctx.fonts(),
             &device,
             font_tex_cpu_descriptor_handle,
@@ -444,6 +473,8 @@ impl Renderer {
             frame_resources,
             root_signature,
             pipeline_state,
+            staging_resource,
+            texture_resource,
             font_tex_cpu_descriptor_handle,
             font_tex_gpu_descriptor_handle,
             textures: Textures::new(),
@@ -481,10 +512,14 @@ impl Renderer {
         self.setup_render_state(draw_data, command_list);
         self.render_impl(draw_data, command_list)?;
 
+        self.current_frame_index = (self.current_frame_index + 1) % self.frame_count;
+
         Ok(())
     }
 
     fn render_impl(&self, draw_data: &DrawData, command_list: &CommandList) -> IDRResult<()> {
+        trace!("render_impl call");
+
         let clip_off = draw_data.display_pos;
         let clip_scale = draw_data.framebuffer_scale;
         let mut vertex_offset = 0;
@@ -492,7 +527,7 @@ impl Renderer {
 
         let mut last_tex =
             TextureId::from(self.font_tex_gpu_descriptor_handle.hw_handle.ptr as usize);
-        command_list.set_graphics_root_descriptor_table(0, self.font_tex_gpu_descriptor_handle);
+        command_list.set_graphics_root_descriptor_table(1, self.font_tex_gpu_descriptor_handle);
 
         for draw_list in draw_data.draw_lists() {
             for cmd in draw_list.commands() {
@@ -503,7 +538,7 @@ impl Renderer {
                     } => {
                         if texture_id != last_tex {
                             command_list.set_graphics_root_descriptor_table(
-                                0,
+                                1,
                                 create_gpu_handle_from_texture_id(
                                     self.font_tex_gpu_descriptor_handle.handle_size,
                                     texture_id,
@@ -521,6 +556,7 @@ impl Renderer {
                         });
 
                         command_list.set_scissor_rects(slice::from_ref(&scissor_rect));
+
                         command_list.draw_indexed_instanced(
                             count as u32,
                             1,
@@ -530,7 +566,10 @@ impl Renderer {
                         );
                         index_offset += count;
                     }
-                    DrawCmd::ResetRenderState => self.setup_render_state(draw_data, command_list),
+                    DrawCmd::ResetRenderState => {
+                        warn!("ResetRenderState was requested but is not currently implemented");
+                        // self.setup_render_state(draw_data, command_list),
+                    }
                     DrawCmd::RawCallback { callback, raw_cmd } => unsafe {
                         callback(draw_list.raw(), raw_cmd)
                     },
@@ -542,6 +581,8 @@ impl Renderer {
     }
 
     fn setup_render_state(&self, draw_data: &DrawData, command_list: &CommandList) {
+        trace!("setup_render_state call");
+
         let current_resources = &self.frame_resources[self.current_frame_index];
 
         let viewport = Viewport(D3D12_VIEWPORT {
@@ -554,7 +595,12 @@ impl Renderer {
         });
 
         command_list.set_viewports(slice::from_ref(&viewport));
+
         command_list.set_vertex_buffers(0, slice::from_ref(&current_resources.vertex_buffer_view));
+        command_list.set_index_buffer(&current_resources.index_buffer_view);
+
+        trace!("set VB/IB, IB view: {:?}", &current_resources.index_buffer_view);
+
         command_list.set_primitive_topology(PrimitiveTopology::TriangleList);
 
         let l = draw_data.display_pos[0];
@@ -574,15 +620,19 @@ impl Renderer {
                 std::mem::size_of::<VertexConstantBuffer>() / std::mem::size_of::<u32>(),
             )
         };
-        command_list.set_graphics_root_32bit_constants(0, data_view, 0);
 
         command_list.set_graphics_root_signature(&self.root_signature);
+
+        command_list.set_graphics_root_32bit_constants(0, data_view, 0);
+
         command_list.set_pipeline_state(&self.pipeline_state);
 
         command_list.set_blend_factor([0., 0., 0., 0.]);
     }
 
     fn update_buffers(&self, draw_data: &DrawData, command_list: &CommandList) -> IDRResult<()> {
+        trace!("update_buffers call");
+
         let mut current_vb_data = self.frame_resources[self.current_frame_index].vertex_buffer_data;
         let mut current_ib_data = self.frame_resources[self.current_frame_index].index_buffer_data;
 
@@ -599,10 +649,20 @@ impl Renderer {
                 current_vb_data =
                     current_vb_data.add(imgui_vb.len() * std::mem::size_of::<DrawVert>());
 
+                trace!(
+                    "copied {} bytes to vertex buffer",
+                    imgui_vb.len() * std::mem::size_of::<DrawVert>()
+                );
+
                 std::ptr::copy_nonoverlapping(
                     imgui_ib.as_ptr() as *mut u8,
                     current_ib_data,
                     imgui_ib.len() * std::mem::size_of::<DrawIdx>(),
+                );
+
+                trace!(
+                    "copied {} bytes to index buffer",
+                    imgui_ib.len() * std::mem::size_of::<DrawIdx>()
                 );
 
                 current_ib_data =
@@ -785,3 +845,7 @@ impl Drop for StateBackup<'_> {
 }
 
 */
+
+pub fn align_to_multiple(location: u64, alignment: u64) -> u64 {
+    (location + (alignment - 1)) & (!(alignment - 1))
+}

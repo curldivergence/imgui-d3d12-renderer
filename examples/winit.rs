@@ -16,6 +16,7 @@ use std::{
     ffi::{c_void, CStr},
     os::raw::c_char,
     rc::Rc,
+    slice,
     time::Instant,
 };
 
@@ -107,7 +108,7 @@ fn create_swapchain(
         .set_height(WINDOW_HEIGHT)
         .set_buffer_count(FRAMES_IN_FLIGHT as u32);
     let swapchain = factory
-        .create_swapchain(&command_queue, hwnd as *mut HWND__, &swapchain_desc)
+        .create_swapchain(command_queue, hwnd as *mut HWND__, &swapchain_desc)
         .expect("Cannot create swapchain");
     factory
         .make_window_association(hwnd, MakeWindowAssociationFlags::NoAltEnter)
@@ -181,7 +182,7 @@ struct WinitSample {
     command_allocators: Vec<CommandAllocator>,
     command_list: CommandList,
     swapchain: Swapchain,
-    swapchain_event: Win32Event,
+    render_targets: Vec<Resource>,
     frame_index: usize,
     rtv_heap: DescriptorHeap,
     srv_uav_heap: DescriptorHeap,
@@ -264,8 +265,6 @@ impl WinitSample {
         let frame_index = swapchain.get_current_back_buffer_index() as usize;
         trace!("Swapchain returned frame index {}", frame_index);
 
-        let swapchain_event = swapchain.get_frame_latency_waitable_object();
-
         let (rtv_heap, srv_uav_heap) = create_descriptor_heaps(&device);
 
         let render_targets = create_render_targets(&device, &rtv_heap, &swapchain);
@@ -284,7 +283,7 @@ impl WinitSample {
             command_allocators,
             command_list,
             swapchain,
-            swapchain_event,
+            render_targets,
             frame_index,
             rtv_heap,
             srv_uav_heap,
@@ -303,8 +302,17 @@ impl WinitSample {
             .reset(&self.command_allocators[self.frame_index], None)
             .expect("Cannot reset command list");
 
+        self.command_list.resource_barrier(slice::from_ref(&ResourceBarrier::new_transition(
+            &ResourceTransitionBarrier::default()
+                .set_resource(&self.render_targets[self.frame_index])
+                .set_state_before(ResourceStates::Present)
+                .set_state_after(ResourceStates::RenderTarget),
+        )));
+
+        self.command_list.set_descriptor_heaps(slice::from_ref(&self.srv_uav_heap));
+
         self.command_list.clear_render_target_view(
-            self.rtv_heap.get_cpu_descriptor_handle_for_heap_start(),
+            self.rtv_heap.get_cpu_descriptor_handle_for_heap_start().advance(self.frame_index as u32),
             [1., 0.3, 0.3, 1.],
             &[],
         );
@@ -313,21 +321,31 @@ impl WinitSample {
     fn submit_commands(&mut self) {
         trace!("Submitting commands, frame idx {}", self.frame_index);
 
+        self.command_list.resource_barrier(slice::from_ref(&ResourceBarrier::new_transition(
+            &ResourceTransitionBarrier::default()
+                .set_resource(&self.render_targets[self.frame_index])
+                .set_state_before(ResourceStates::RenderTarget)
+                .set_state_after(ResourceStates::Present),
+        )));
+
         self.command_list.close().expect("Cannot close command list");
 
         self.command_queue.execute_command_lists(std::slice::from_ref(&self.command_list));
 
         self.frame_fence_value += 1;
 
+        self.command_queue
+            .signal(&self.frame_fence, self.frame_fence_value)
+            .expect("Cannot signal fence on queue");
+
         if self.frame_fence.get_completed_value() < self.frame_fence_value {
             self.frame_fence
                 .set_event_on_completion(self.frame_fence_value, &self.frame_fence_event)
                 .expect("Cannot set frame fence event");
 
+            trace!("waiting on fence event (value {})", self.frame_fence_value);
             self.frame_fence_event.wait(None);
         }
-
-        self.frame_index = (self.frame_index + 1) % FRAMES_IN_FLIGHT as usize;
     }
 
     fn present(&mut self) {
@@ -336,6 +354,10 @@ impl WinitSample {
             let real_error = self.device.get_device_removed_reason();
             error!("Device removed reason: {}", real_error);
         });
+
+        trace!("moving to the next frame");
+
+        self.frame_index = self.swapchain.get_current_back_buffer_index() as usize;
     }
 }
 
@@ -362,7 +384,8 @@ fn main() {
         0 => log_level = log::Level::Debug,
         1 | _ => log_level = log::Level::Trace,
     };
-    simple_logger::init_with_level(log_level).unwrap();
+    // simple_logger::init_with_level(log_level).unwrap();
+    simple_logger::init_with_level(log::Level::Trace).unwrap();
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
@@ -371,7 +394,11 @@ fn main() {
         .build(&event_loop)
         .unwrap();
 
-    let mut app = WinitSample::new(window.hwnd(), command_args.is_present("debug"));
+    let mut app = WinitSample::new(
+        window.hwnd(),
+        // command_args.is_present("debug")
+        true,
+    );
 
     let mut imgui = imgui::Context::create();
     imgui.set_ini_filename(None);
