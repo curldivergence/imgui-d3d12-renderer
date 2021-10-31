@@ -5,6 +5,7 @@ use imgui::{
     BackendFlags, DrawCmd, DrawCmdParams, DrawData, DrawIdx, DrawVert, TextureId, Textures,
 };
 use log::info;
+use memoffset::offset_of;
 
 use core::num::NonZeroI32;
 use core::ptr;
@@ -51,140 +52,339 @@ pub struct Renderer {
 // textures: Textures<ComPtr<ID3D11ShaderResourceView>>,
 }
 
-fn create_device(factory: &Factory) -> IDRResult<Device> {
-    let adapter;
-    adapter = get_hardware_adapter(factory);
+fn create_shaders() -> IDRResult<(Vec<u8>, Vec<u8>)> {
+    let vertex_shader = compile_shader(
+        "VertexShader",
+        r"#
+cbuffer vertexBuffer: register(b0) {
+            float4x4 ProjectionMatrix;
+        };
 
-    let adapter_desc = adapter.get_desc().expect("Cannot get adapter desc");
+        struct VS_INPUT {
+            float2 pos: POSITION;
+            float4 col: COLOR0;
+            float2 uv: TEXCOORD0;
+        };
 
-    info!("Enumerated adapter: \n\t{}", adapter_desc,);
-    (
-        Device::new(&adapter)
-            .unwrap_or_else(|_| panic!("Cannot create device on adapter {}", adapter_desc)),
-        adapter_desc.is_software(),
+        struct PS_INPUT {
+            float4 pos: SV_POSITION;
+            float4 col: COLOR0;
+            float2 uv: TEXCOORD0;
+        };
+
+        PS_INPUT main(VS_INPUT input) {
+            PS_INPUT output;
+            output.pos = mul(ProjectionMatrix, float4(input.pos.xy, 0.f, 1.f));
+            output.col = input.col;
+            output.uv = input.uv;
+            return output;
+        }
+#",
+        "main",
+        "vs_6_0",
+        &[],
+        &[],
+    )?;
+
+    let pixel_shader = compile_shader(
+        "PixelShader",
+        r"#
+struct PS_INPUT {
+    float4 pos: SV_POSITION;
+    float4 col: COLOR0;
+    float2 uv: TEXCOORD0;
+};
+
+sampler sampler0;
+Texture2D texture0;
+
+float4 main(PS_INPUT input): SV_Target {
+    float4 out_col = input.col * texture0.Sample(sampler0, input.uv);
+    return out_col;
+}
+#",
+        "main",
+        "ps_6_0",
+        &[],
+        &[],
     )
+    .expect("Cannot compile pixel shader")?;
+
+    Ok((vertex_shader, pixel_shader))
 }
 
-fn get_hardware_adapter(factory: &Factory, adapter_index: usi) -> Adapter {
-    let mut adapters = factory
-        .enum_adapters_by_gpu_preference(GpuPreference::HighPerformance)
-        .expect("Cannot enumerate adapters");
+fn create_pipeline_state(
+    input_layout: Vec<InputElementDesc>,
+    root_signature: &RootSignature,
+    vertex_shader: Vec<u8>,
+    pixel_shader: Vec<u8>,
+    device: &Device,
+) -> IDRResult<PipelineState> {
+    let vs_bytecode = ShaderBytecode::from_bytes(&vertex_shader);
+    let ps_bytecode = ShaderBytecode::from_bytes(&pixel_shader);
 
-    for adapter in &adapters {
-        let desc = adapter.get_desc().expect("Cannot get adapter desc");
-        info!("found adapter: {}", desc);
+    let input_layout = InputLayoutDesc::default().from_input_elements(&input_layout);
+    let pso_desc = GraphicsPipelineStateDesc::default()
+        .set_input_layout(&input_layout)
+        .set_root_signature(root_signature)
+        .set_vs_bytecode(&vs_bytecode)
+        .set_ps_bytecode(&ps_bytecode)
+        .set_rasterizer_state(
+            &RasterizerDesc::default().set_fill_mode(FillMode::Solid).set_depth_clip_enable(true),
+        )
+        .set_blend_state(
+            &BlendDesc::default().set_render_targets(&[RenderTargetBlendDesc::default()
+                .set_blend_enable(true)
+                .set_src_blend(Blend::SrcAlpha)
+                .set_dest_blend(Blend::InvSrcAlpha)
+                .set_blend_op(BlendOp::Add)
+                .set_src_blend_alpha(Blend::InvDestAlpha)
+                .set_dest_blend_alpha(Blend::One)
+                .set_blend_op_alpha(BlendOp::Add)
+                .set_render_target_write_mask(ColorWriteEnable::EnableAll)]),
+        )
+        .set_depth_stencil_state(&DepthStencilDesc::default())
+        .set_primitive_topology_type(PrimitiveTopologyType::Triangle)
+        .set_rtv_formats(&[Format::R8G8B8A8_UNorm])
+        .set_dsv_format(Format::D32_Float);
+
+    device.create_graphics_pipeline_state(&pso_desc)
+}
+
+fn create_input_layout() -> Vec<InputElementDesc<'static>> {
+    vec![
+        InputElementDesc::default()
+            // ToDo: "POSITION\0" on lib side would allow to get rid of allocations
+            .set_name("POSITION")
+            .unwrap()
+            .set_format(Format::R32G32B32_Float)
+            .set_input_slot(0)
+            .set_offset(Bytes::from(offset_of!(DrawVert, pos))),
+        InputElementDesc::default()
+            .set_name("TEXCOORD")
+            .unwrap()
+            .set_format(Format::R32G32_Float)
+            .set_input_slot(0)
+            .set_offset(Bytes::from(offset_of!(DrawVert, uv))),
+        InputElementDesc::default()
+            .set_name("COLOR")
+            .unwrap()
+            .set_format(Format::R8G8B8A8_UNorm)
+            .set_input_slot(0)
+            .set_offset(Bytes::from(offset_of!(DrawVert, col))),
+    ]
+}
+
+fn setup_root_signature(device: &Device) -> IDRResult<RootSignature> {
+    let ranges = [
+        DescriptorRange::default()
+            .set_range_type(DescriptorRangeType::Cbv)
+            .set_num_descriptors(1)
+            .set_flags(DescriptorRangeFlags::DataVolatile),
+        DescriptorRange::default()
+            .set_range_type(DescriptorRangeType::Srv)
+            .set_num_descriptors(1)
+            .set_flags(DescriptorRangeFlags::DataVolatile),
+    ];
+
+    let static_sampler_desc = StaticSamplerDesc::default()
+        .set_filter(Filter::MinMagMipLinear)
+        .set_address_u(TextureAddressMode::Wrap)
+        .set_address_v(TextureAddressMode::Wrap)
+        .set_address_w(TextureAddressMode::Wrap)
+        .set_comparison_func(ComparisonFunc::Always)
+        .set_border_color(StaticBorderColor::TransparentBlack)
+        .set_shader_visibility(ShaderVisibility::Pixel);
+
+    let descriptor_table = RootDescriptorTable::default().set_descriptor_ranges(&ranges);
+
+    let root_parameters = vec![RootParameter::default()
+        .new_descriptor_table(&descriptor_table)
+        .set_shader_visibility(ShaderVisibility::All)];
+    let root_signature_desc = VersionedRootSignatureDesc::default().set_desc_1_1(
+        &RootSignatureDesc::default()
+            .set_parameters(&root_parameters)
+            .set_static_samplers(slice::from_ref(&static_sampler_desc))
+            .set_flags(RootSignatureFlags::AllowInputAssemblerInputLayout),
+    );
+
+    let (serialized_signature, serialization_result) =
+        RootSignature::serialize_versioned(&root_signature_desc);
+    assert!(serialization_result.is_ok(), "Result: {}", &serialization_result.err().unwrap());
+
+    device.create_root_signature(0, &ShaderBytecode::from_bytes(serialized_signature.get_buffer()))
+}
+
+fn create_font_texture(
+    mut fonts: imgui::FontAtlasRefMut<'_>,
+    device: &Device,
+    font_tex_cpu_descriptor_handle: CpuDescriptorHandle,
+)
+//-> IDRResult<(ComPtr<ID3D11ShaderResourceView>, ComPtr<ID3D11SamplerState>)> {
+{
+    let fa_tex = fonts.build_rgba32_texture();
+
+    let texture_desc = ResourceDesc::default()
+        .set_dimension(ResourceDimension::Texture2D)
+        .set_width(fa_tex.width)
+        .set_height(fa_tex.height)
+        .set_mip_levels(1)
+        .set_format(Format::R8G8B8A8_UNorm);
+
+    let (staging_resource, texture_resource) = upload_texture(device, &texture_desc, fa_tex.data);
+
+    device.create_shader_resource_view(&texture_resource, None, font_tex_cpu_descriptor_handle);
+
+    fonts.tex_id = TextureId::from(FONT_TEX_ID);
+
+    let desc = D3D11_SAMPLER_DESC {
+        Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+        AddressU: D3D11_TEXTURE_ADDRESS_WRAP,
+        AddressV: D3D11_TEXTURE_ADDRESS_WRAP,
+        AddressW: D3D11_TEXTURE_ADDRESS_WRAP,
+        MipLODBias: 0.0,
+        MaxAnisotropy: 0,
+        ComparisonFunc: D3D11_COMPARISON_ALWAYS,
+        BorderColor: [0.0; 4],
+        MinLOD: 0.0,
+        MaxLOD: 0.0,
+    };
+    let font_sampler =
+        com_ptr_from_fn(|font_sampler| device.CreateSamplerState(&desc, font_sampler))?;
+    Ok((font_texture_view, font_sampler))
+}
+
+fn upload_texture(
+    device: &Device,
+    texture_desc: &ResourceDesc,
+    init_data: &[u8],
+) -> IDRResult<(Resource, Resource)> {
+    let staging_resource = device.create_committed_resource(
+        &HeapProperties::default().set_heap_type(HeapType::Upload),
+        HeapFlags::None,
+        texture_desc,
+        ResourceStates::CopySource,
+        None,
+    )?;
+
+    let staging_data = staging_resource.map(0, None)?;
+
+    unsafe {
+        std::ptr::copy_nonoverlapping(init_data.as_ptr(), staging_data, init_data.len());
     }
-    adapters.remove(0)
+
+    staging_resource.unmap(0, None);
+
+    let texture_resource = device.create_committed_resource(
+        &HeapProperties::default().set_heap_type(HeapType::Default),
+        HeapFlags::None,
+        texture_desc,
+        ResourceStates::CopyDest,
+        None,
+    )?;
+
+    let command_queue = device.create_command_queue(
+        &CommandQueueDesc::default()
+            .set_queue_type(CommandListType::Direct)
+            .set_flags(CommandQueueFlags::None),
+    )?;
+
+    let command_allocator = device.create_command_allocator(CommandListType::Direct)?;
+
+    let command_list =
+        device.create_command_list(CommandListType::Dirce, &command_allocator, None)?;
+
+    let mut fence_value = 0;
+    let fence = device.create_fence(fence_value, FenceFlags::None)?;
+    let event = Win32Event::default();
+
+    command_list.copy_resource(&texture_resource, &staging_resource);
+
+    command_list.resource_barrier(std::slice::from_ref(&ResourceBarrier::new_transition(
+        &ResourceTransitionBarrier::default()
+            .set_resource(&texture_resource)
+            .set_state_before(ResourceStates::CopyDest)
+            .set_state_after(ResourceStates::PixelShaderResource),
+    )));
+
+    command_list.close()?;
+    command_queue.execute_command_lists(slice::from_ref(&command_list));
+
+    fence_value += 1;
+    command_queue.signal(&fence, fence_value);
+
+    fence.set_event_on_completion(fence_value, &event);
+    event.wait(None);
+
+    Ok((staging_resource, texture_resource))
 }
 
 impl Renderer {
     pub fn new(
         im_ctx: &mut imgui::Context,
-        adapter_index: usize,
-        use_debug: bool,
+        device: &Device,
+        frame_count: usize,
+        font_tex_cpu_descriptor_handle: CpuDescriptorHandle,
+        font_tex_gpu_descriptor_handle: GpuDescriptorHandle,
     ) -> IDRResult<Self> {
-        let mut factory_flags = CreateFactoryFlags::None;
-        if use_debug {
-            let debug_controller = Debug::new()?;
-            debug_controller.enable_debug_layer();
-            debug_controller.enable_gpu_based_validation();
-            debug_controller.enable_object_auto_name();
-            factory_flags = CreateFactoryFlags::Debug;
-        }
+        let (vertex_shader, pixel_shader) = create_shaders();
 
-        let factory = Factory::new(factory_flags)?;
+        let input_layout = create_input_layout();
+        let root_signature = setup_root_signature(device);
+        let pipeline_state = create_pipeline_state(
+            input_layout,
+            &root_signature,
+            vertex_shader,
+            pixel_shader,
+            device,
+        );
 
-        Self::acquire_factory(&device).and_then(|factory| {
-            let (vertex_shader, input_layout, constant_buffer) =
-                Self::create_vertex_shader(&device)?;
-            let pixel_shader = Self::create_pixel_shader(&device)?;
-            let (blend_state, rasterizer_state, depth_stencil_state) =
-                Self::create_device_objects(&device)?;
-            let (font_resource_view, font_sampler) =
-                Self::create_font_texture(im_ctx.fonts(), &device)?;
-            let vertex_buffer = Self::create_vertex_buffer(&device, 0)?;
-            let index_buffer = Self::create_index_buffer(&device, 0)?;
-            let context = {
-                let mut context = ptr::null_mut();
-                device.GetImmediateContext(&mut context);
-                ComPtr::from_raw(context)
-            };
-            im_ctx.io_mut().backend_flags |= BackendFlags::RENDERER_HAS_VTX_OFFSET;
-            im_ctx.set_renderer_name(Some(
-                concat!("imgui_dx11_renderer@", env!("CARGO_PKG_VERSION")).to_owned(),
-            ));
+        let (font_resource_view, font_sampler) = create_font_texture(im_ctx.fonts(), &device)?;
+        let vertex_buffer = Self::create_vertex_buffer(&device, 0)?;
+        let index_buffer = Self::create_index_buffer(&device, 0)?;
+        let context = {
+            let mut context = ptr::null_mut();
+            device.GetImmediateContext(&mut context);
+            ComPtr::from_raw(context)
+        };
+        im_ctx.io_mut().backend_flags |= BackendFlags::RENDERER_HAS_VTX_OFFSET;
+        im_ctx.set_renderer_name(Some(
+            concat!("imgui_d3d12_renderer@", env!("CARGO_PKG_VERSION")).to_owned(),
+        ));
 
-            Ok(Renderer {
-                device,
-                context,
-                factory,
-                vertex_shader,
-                pixel_shader,
-                input_layout,
-                constant_buffer,
-                blend_state,
-                rasterizer_state,
-                depth_stencil_state,
-                font_resource_view,
-                font_sampler,
-                vertex_buffer,
-                index_buffer,
-                textures: Textures::new(),
-            })
+        Ok(Renderer {
+            device,
+            context,
+            factory,
+            vertex_shader,
+            pixel_shader,
+            input_layout,
+            constant_buffer,
+            blend_state,
+            rasterizer_state,
+            depth_stencil_state,
+            font_resource_view,
+            font_sampler,
+            vertex_buffer,
+            index_buffer,
+            textures: Textures::new(),
         })
     }
 
-    /// Creates a new renderer for the given [`ID3D11Device`].
-    ///
-    /// # Safety
-    ///
-    /// `device` must be a valid [`ID3D11Device`] pointer.
-    ///
-    /// [`ID3D11Device`]: https://docs.rs/winapi/0.3/x86_64-pc-windows-msvc/winapi/um/d3d11/struct.ID3D11Device.html
-    pub unsafe fn new_raw(im_ctx: &mut imgui::Context, device: *mut ID3D11Device) -> HResult<Self> {
-        let device = ComPtr::from_raw(device);
-        device.AddRef();
-        Self::new(im_ctx, device)
-    }
-
-    unsafe fn acquire_factory(device: &ComPtr<ID3D11Device>) -> HResult<ComPtr<IDXGIFactory>> {
-        // currently unused, but will potentially be required when the docking feature
-        // is finalized
-        device
-            .cast::<IDXGIDevice>()
-            .map_err(|e| NonZeroI32::new_unchecked(e))
-            .and_then(|dxgi_device| {
-                com_ptr_from_fn::<IDXGIAdapter, _>(|dxgi_adapter| {
-                    dxgi_device.GetParent(
-                        &IDXGIAdapter::uuidof(),
-                        dxgi_adapter as *mut *mut _ as *mut *mut _,
-                    )
-                })
-            })
-            .and_then(|dxgi_adapter| {
-                com_ptr_from_fn::<IDXGIFactory, _>(|dxgi_factory| {
-                    dxgi_adapter.GetParent(
-                        &IDXGIFactory::uuidof(),
-                        dxgi_factory as *mut *mut _ as *mut *mut _,
-                    )
-                })
-            })
-    }
+    // /// The textures registry of this renderer.
+    // ///
+    // /// The texture slot at !0 is reserved for the font texture, therefore the
+    // /// renderer will ignore any texture inserted into said slot.
+    // #[inline]
+    // pub fn textures_mut(&mut self) -> &mut Textures<ComPtr<ID3D11ShaderResourceView>> {
+    //     &mut self.textures
+    // }
 
     /// The textures registry of this renderer.
-    ///
-    /// The texture slot at !0 is reserved for the font texture, therefore the
-    /// renderer will ignore any texture inserted into said slot.
-    #[inline]
-    pub fn textures_mut(&mut self) -> &mut Textures<ComPtr<ID3D11ShaderResourceView>> {
-        &mut self.textures
-    }
-
-    /// The textures registry of this renderer.
-    #[inline]
-    pub fn textures(&self) -> &Textures<ComPtr<ID3D11ShaderResourceView>> {
-        &self.textures
-    }
+    // #[inline]
+    // pub fn textures(&self) -> &Textures<ComPtr<ID3D11ShaderResourceView>> {
+    //     &self.textures
+    // }
 
     /// Renders the given [`Ui`] with this renderer.
     ///
@@ -265,7 +465,6 @@ impl Renderer {
         Ok(())
     }
 
-    #[rustfmt::skip]
     unsafe fn setup_render_state(&self, draw_data: &DrawData) {
         let ctx = &*self.context;
 
@@ -408,65 +607,6 @@ impl Renderer {
         *mapped_resource.pData.cast::<VertexConstantBuffer>() = VertexConstantBuffer { mvp };
         self.context.Unmap(com_ref_cast(&self.constant_buffer).as_raw(), 0);
         Ok(())
-    }
-
-    unsafe fn create_font_texture(
-        mut fonts: imgui::FontAtlasRefMut<'_>,
-        device: &ComPtr<ID3D11Device>,
-    ) -> HResult<(ComPtr<ID3D11ShaderResourceView>, ComPtr<ID3D11SamplerState>)> {
-        let fa_tex = fonts.build_rgba32_texture();
-
-        let desc = D3D11_TEXTURE2D_DESC {
-            Width: fa_tex.width,
-            Height: fa_tex.height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-            Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: D3D11_BIND_SHADER_RESOURCE,
-            CPUAccessFlags: 0,
-            MiscFlags: 0,
-        };
-        let sub_resource = D3D11_SUBRESOURCE_DATA {
-            pSysMem: fa_tex.data.as_ptr().cast(),
-            SysMemPitch: desc.Width * 4,
-            SysMemSlicePitch: 0,
-        };
-        let texture =
-            com_ptr_from_fn(|texture| device.CreateTexture2D(&desc, &sub_resource, texture))?;
-
-        let mut desc = D3D11_SHADER_RESOURCE_VIEW_DESC {
-            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-            ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
-            u: mem::zeroed(),
-        };
-        *desc.u.Texture2D_mut() = D3D11_TEX2D_SRV { MostDetailedMip: 0, MipLevels: 1 };
-        let font_texture_view = com_ptr_from_fn(|font_texture_view| {
-            device.CreateShaderResourceView(
-                com_ref_cast(&texture).as_raw(),
-                &desc,
-                font_texture_view,
-            )
-        })?;
-
-        fonts.tex_id = TextureId::from(FONT_TEX_ID);
-
-        let desc = D3D11_SAMPLER_DESC {
-            Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-            AddressU: D3D11_TEXTURE_ADDRESS_WRAP,
-            AddressV: D3D11_TEXTURE_ADDRESS_WRAP,
-            AddressW: D3D11_TEXTURE_ADDRESS_WRAP,
-            MipLODBias: 0.0,
-            MaxAnisotropy: 0,
-            ComparisonFunc: D3D11_COMPARISON_ALWAYS,
-            BorderColor: [0.0; 4],
-            MinLOD: 0.0,
-            MaxLOD: 0.0,
-        };
-        let font_sampler =
-            com_ptr_from_fn(|font_sampler| device.CreateSamplerState(&desc, font_sampler))?;
-        Ok((font_texture_view, font_sampler))
     }
 
     unsafe fn create_vertex_shader(

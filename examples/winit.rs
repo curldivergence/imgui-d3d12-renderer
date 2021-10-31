@@ -15,34 +15,27 @@ use std::time::Instant;
 const WINDOW_WIDTH: f64 = 760.0;
 const WINDOW_HEIGHT: f64 = 760.0;
 
-
 fn main() {
     let command_args = clap::App::new("ImGUI D3D12 Example")
-    .arg(
-        clap::Arg::with_name("breakonerr")
-            .short("b")
-            .takes_value(false)
-            .help("Break on validation errors"),
-    )
-    .arg(
-        clap::Arg::with_name("v")
-            .short("v")
-            .multiple(true)
-            .help("Verbosity level"),
-    )
-    .arg(
-        clap::Arg::with_name("debug")
-            .short("d")
-            .takes_value(false)
-            .help("Use D3D debug layers"),
-    )
-    .get_matches();
+        .arg(
+            clap::Arg::with_name("breakonerr")
+                .short("b")
+                .takes_value(false)
+                .help("Break on validation errors"),
+        )
+        .arg(clap::Arg::with_name("v").short("v").multiple(true).help("Verbosity level"))
+        .arg(
+            clap::Arg::with_name("debug")
+                .short("d")
+                .takes_value(false)
+                .help("Use D3D debug layers"),
+        )
+        .get_matches();
 
     match command_args.occurrences_of("v") {
         0 => log_level = log::Level::Debug,
         1 | _ => log_level = log::Level::Trace,
     };
-
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
@@ -82,12 +75,12 @@ fn main() {
             let now = Instant::now();
             imgui.io_mut().update_delta_time(now - last_frame);
             last_frame = now;
-        },
+        }
         Event::MainEventsCleared => {
             let io = imgui.io_mut();
             platform.prepare_frame(io, &window).expect("Failed to start frame");
             window.request_redraw();
-        },
+        }
         Event::RedrawRequested(_) => {
             unsafe {
                 context.OMSetRenderTargets(1, &main_rtv.as_raw(), ptr::null_mut());
@@ -109,10 +102,10 @@ fn main() {
             unsafe {
                 swapchain.Present(1, 0);
             }
-        },
+        }
         Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
             *control_flow = winit::event_loop::ControlFlow::Exit
-        },
+        }
         Event::WindowEvent {
             event: WindowEvent::Resized(winit::dpi::PhysicalSize { height, width }),
             ..
@@ -125,6 +118,6 @@ fn main() {
         Event::LoopDestroyed => (),
         event => {
             platform.handle_event(imgui.io_mut(), &window, &event);
-        },
+        }
     });
 }
