@@ -11,7 +11,7 @@ readme = "README.md"
 categories = ["gui", "rendering"]
 
 [dependencies]
-rusty-d3d12 = { git = "https://github.com/curldivergence/rusty-d3d12" }
+rusty-d3d12 = "0.2.4"
 imgui = "0.8"
 thiserror = "1.0"
 log = "0.4"

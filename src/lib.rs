@@ -112,7 +112,9 @@ fn create_pipeline_state(
         .set_vs_bytecode(&vs_bytecode)
         .set_ps_bytecode(&ps_bytecode)
         .set_rasterizer_state(
-            &RasterizerDesc::default().set_fill_mode(FillMode::Solid).set_depth_clip_enable(true),
+            &RasterizerDesc::default()
+                .set_fill_mode(FillMode::Solid)
+                .set_depth_clip_enable(true),
         )
         .set_blend_state(
             &BlendDesc::default().set_render_targets(&[RenderTargetBlendDesc::default()
@@ -130,7 +132,9 @@ fn create_pipeline_state(
         .set_rtv_formats(&[Format::R8G8B8A8_UNorm])
         .set_dsv_format(Format::D32_Float);
 
-    device.create_graphics_pipeline_state(&pso_desc).map_err(|err| err.into())
+    device
+        .create_graphics_pipeline_state(&pso_desc)
+        .map_err(|err| err.into())
 }
 
 fn create_input_layout() -> Vec<InputElementDesc<'static>> {
@@ -191,10 +195,16 @@ fn setup_root_signature(device: &Device) -> IDRResult<RootSignature> {
 
     let (serialized_signature, serialization_result) =
         RootSignature::serialize_versioned(&root_signature_desc);
-    assert!(serialization_result.is_ok(), "Result: {}", &serialization_result.err().unwrap());
+    assert!(
+        serialization_result.is_ok(),
+        "Result: {}",
+        &serialization_result.err().unwrap()
+    );
 
-    let root_signature = device
-        .create_root_signature(0, &ShaderBytecode::from_bytes(serialized_signature.get_buffer()))?;
+    let root_signature = device.create_root_signature(
+        0,
+        &ShaderBytecode::from_bytes(serialized_signature.get_buffer()),
+    )?;
 
     root_signature.set_name("ImGUI Root Signature")?;
 
@@ -276,17 +286,19 @@ fn upload_texture(
 
     let source_location = TextureCopyLocation::new_placed_footprint(
         &staging_buffer,
-        PlacedSubresourceFootprint::default().set_offset(Bytes(0)).set_footprint(
-            SubresourceFootprint::default()
-                .set_width(texture_desc.width() as u32)
-                .set_height(texture_desc.height())
-                .set_depth(1)
-                .set_format(Format::R8G8B8A8_UNorm)
-                .set_row_pitch(Bytes(align_to_multiple(
-                    texture_desc.width() as u64 * 4,
-                    TEXTURE_DATA_PITCH_ALIGNMENT.0,
-                ))),
-        ),
+        PlacedSubresourceFootprint::default()
+            .set_offset(Bytes(0))
+            .set_footprint(
+                SubresourceFootprint::default()
+                    .set_width(texture_desc.width() as u32)
+                    .set_height(texture_desc.height())
+                    .set_depth(1)
+                    .set_format(Format::R8G8B8A8_UNorm)
+                    .set_row_pitch(Bytes(align_to_multiple(
+                        texture_desc.width() as u64 * 4,
+                        TEXTURE_DATA_PITCH_ALIGNMENT.0,
+                    ))),
+            ),
     );
 
     let dest_location = TextureCopyLocation::new_subresource_index(&texture_resource, 0);
@@ -364,7 +376,7 @@ fn create_index_buffer(
 
     let index_buffer_view = IndexBufferView::default()
         .set_buffer_location(index_buffer.get_gpu_virtual_address())
-        .set_size_in_bytes(index_count * size_of!(DrawIdx))
+        .set_size_in_bytes(index_buffer_size)
         .set_format(match size_of!(DrawIdx) {
             Bytes(2) => Format::R16_UInt,
             Bytes(4) => Format::R32_UInt,
@@ -378,7 +390,9 @@ fn create_index_buffer(
 
 fn create_gpu_handle_from_texture_id(handle_size: u32, id: TextureId) -> GpuDescriptorHandle {
     GpuDescriptorHandle {
-        hw_handle: D3D12_GPU_DESCRIPTOR_HANDLE { ptr: id.id() as u64 },
+        hw_handle: D3D12_GPU_DESCRIPTOR_HANDLE {
+            ptr: id.id() as u64,
+        },
         handle_size,
     }
 }
@@ -534,7 +548,12 @@ impl Renderer {
                 match cmd {
                     DrawCmd::Elements {
                         count,
-                        cmd_params: DrawCmdParams { clip_rect, texture_id, .. },
+                        cmd_params:
+                            DrawCmdParams {
+                                clip_rect,
+                                texture_id,
+                                ..
+                            },
                     } => {
                         if texture_id != last_tex {
                             command_list.set_graphics_root_descriptor_table(
@@ -599,7 +618,10 @@ impl Renderer {
         command_list.set_vertex_buffers(0, slice::from_ref(&current_resources.vertex_buffer_view));
         command_list.set_index_buffer(&current_resources.index_buffer_view);
 
-        trace!("set VB/IB, IB view: {:?}", &current_resources.index_buffer_view);
+        trace!(
+            "set VB/IB, IB view: {:?}",
+            &current_resources.index_buffer_view
+        );
 
         command_list.set_primitive_topology(PrimitiveTopology::TriangleList);
 
@@ -636,8 +658,9 @@ impl Renderer {
         let mut current_vb_data = self.frame_resources[self.current_frame_index].vertex_buffer_data;
         let mut current_ib_data = self.frame_resources[self.current_frame_index].index_buffer_data;
 
-        for (imgui_vb, imgui_ib) in
-            draw_data.draw_lists().map(|draw_list| (draw_list.vtx_buffer(), draw_list.idx_buffer()))
+        for (imgui_vb, imgui_ib) in draw_data
+            .draw_lists()
+            .map(|draw_list| (draw_list.vtx_buffer(), draw_list.idx_buffer()))
         {
             unsafe {
                 std::ptr::copy_nonoverlapping(
@@ -673,178 +696,6 @@ impl Renderer {
         Ok(())
     }
 }
-
-/*
-
-struct StateBackup<'ctx> {
-    context: &'ctx ID3D11DeviceContext,
-
-    scissor_rects: [D3D11_RECT; D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE as usize],
-    scissor_rects_count: u32,
-    viewports: [D3D11_VIEWPORT; D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE as usize],
-    viewports_count: u32,
-    rasterizer_state: OptComPtr<ID3D11RasterizerState>,
-
-    blend_state: OptComPtr<ID3D11BlendState>,
-    blend_factor: [f32; 4],
-    sample_mask: u32,
-    depth_stencil_state: OptComPtr<ID3D11DepthStencilState>,
-    stencil_ref: u32,
-
-    shader_resource: OptComPtr<ID3D11ShaderResourceView>,
-    sampler: OptComPtr<ID3D11SamplerState>,
-    ps_shader: OptComPtr<ID3D11PixelShader>,
-    ps_instances: *mut [ID3D11ClassInstance],
-    vs_shader: OptComPtr<ID3D11VertexShader>,
-    vs_instances: *mut [ID3D11ClassInstance],
-    constant_buffer: OptComPtr<ID3D11Buffer>,
-    gs_shader: OptComPtr<ID3D11GeometryShader>,
-    gs_instances: *mut [ID3D11ClassInstance],
-
-    index_buffer: OptComPtr<ID3D11Buffer>,
-    index_buffer_offset: u32,
-    index_buffer_format: u32,
-    vertex_buffer: OptComPtr<ID3D11Buffer>,
-    vertex_buffer_offset: u32,
-    vertex_buffer_stride: u32,
-    topology: D3D11_PRIMITIVE_TOPOLOGY,
-    input_layout: OptComPtr<ID3D11InputLayout>,
-}
-
-impl<'ctx> StateBackup<'ctx> {
-    #[rustfmt::skip]
-    unsafe fn backup(ctx: &'ctx ID3D11DeviceContext) -> Self {
-        let mut scissor_rects_count = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-        let mut viewports_count = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-        let mut scissor_rects = [D3D11_RECT {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        }; D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE as usize];
-        ctx.RSGetScissorRects(&mut scissor_rects_count, scissor_rects.as_mut_ptr());
-        let mut viewports = [D3D11_VIEWPORT {
-            TopLeftX: 0.0,
-            TopLeftY: 0.0,
-            Width: 0.0,
-            Height: 0.0,
-            MinDepth: 0.0,
-            MaxDepth: 0.0,
-        }; D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE as usize];
-        ctx.RSGetViewports(&mut viewports_count, viewports.as_mut_ptr());
-        let rasterizer_state =
-            com_ptr_from_fn_opt(|rasterizer_state| ctx.RSGetState(rasterizer_state));
-
-        let mut blend_factor = [0.0; 4];
-        let mut sample_mask = 0;
-        let blend_state = com_ptr_from_fn_opt(|blend_state| {
-            ctx.OMGetBlendState(blend_state, &mut blend_factor, &mut sample_mask)
-        });
-        let mut stencil_ref = 0;
-        let depth_stencil_state = com_ptr_from_fn_opt(|depth_stencil_state| {
-            ctx.OMGetDepthStencilState(depth_stencil_state, &mut stencil_ref)
-        });
-
-        let shader_resource =
-            com_ptr_from_fn_opt(|shader_resource| ctx.PSGetShaderResources(0, 1, shader_resource));
-        let sampler = com_ptr_from_fn_opt(|sampler| ctx.PSGetSamplers(0, 1, sampler));
-        let mut ps_instances = ptr::null_mut();
-        let mut ps_instances_count = 0;
-        let ps_shader = com_ptr_from_fn_opt(|ps_shader| {
-            ctx.PSGetShader(ps_shader, &mut ps_instances, &mut ps_instances_count)
-        });
-        let ps_instances = ptr::slice_from_raw_parts_mut(ps_instances, ps_instances_count as usize);
-
-        let mut vs_instances = ptr::null_mut();
-        let mut vs_instances_count = 0;
-        let vs_shader = com_ptr_from_fn_opt(|vs_shader| {
-            ctx.VSGetShader(vs_shader, &mut vs_instances, &mut vs_instances_count)
-        });
-        let vs_instances = ptr::slice_from_raw_parts_mut(vs_instances, vs_instances_count as usize);
-        let constant_buffer =
-            com_ptr_from_fn_opt(|constant_buffer| ctx.VSGetConstantBuffers(0, 1, constant_buffer));
-
-        let mut gs_instances = ptr::null_mut();
-        let mut gs_instances_count = 0;
-        let gs_shader = com_ptr_from_fn_opt(|gs_shader| {
-            ctx.GSGetShader(gs_shader, &mut gs_instances, &mut gs_instances_count)
-        });
-        let gs_instances = ptr::slice_from_raw_parts_mut(gs_instances, gs_instances_count as usize);
-
-        let mut topology = 0;
-        ctx.IAGetPrimitiveTopology(&mut topology);
-        let mut index_buffer_format = 0;
-        let mut index_buffer_offset = 0;
-        let index_buffer = com_ptr_from_fn_opt(|index_buffer| {
-            ctx.IAGetIndexBuffer(
-                index_buffer,
-                &mut index_buffer_format,
-                &mut index_buffer_offset,
-            )
-        });
-        let mut vertex_buffer_stride = 0;
-        let mut vertex_buffer_offset = 0;
-        let vertex_buffer = com_ptr_from_fn_opt(|vertex_buffer| {
-            ctx.IAGetVertexBuffers(
-                0,
-                1,
-                vertex_buffer,
-                &mut vertex_buffer_stride,
-                &mut vertex_buffer_offset,
-            )
-        });
-        let input_layout = com_ptr_from_fn_opt(|input_layout| ctx.IAGetInputLayout(input_layout));
-        StateBackup {
-            context:ctx, scissor_rects, scissor_rects_count, viewports, viewports_count,
-            rasterizer_state, blend_state, blend_factor, sample_mask, depth_stencil_state,
-            stencil_ref, shader_resource, sampler, ps_shader, ps_instances, vs_shader,
-            vs_instances, constant_buffer, gs_shader, gs_instances, index_buffer,
-            index_buffer_offset, index_buffer_format, vertex_buffer, vertex_buffer_offset,
-            vertex_buffer_stride, topology, input_layout
-        }
-    }
-}
-
-impl Drop for StateBackup<'_> {
-    #[rustfmt::skip]
-    fn drop(&mut self) {
-        unsafe {
-            let ctx = self.context;
-            ctx.RSSetScissorRects(self.scissor_rects_count, self.scissor_rects.as_ptr());
-            ctx.RSSetViewports(self.viewports_count, self.viewports.as_ptr());
-            ctx.RSSetState(opt_com_ptr_as_raw(&self.rasterizer_state));
-
-            ctx.OMSetBlendState(opt_com_ptr_as_raw(&self.blend_state), &self.blend_factor, self.sample_mask);
-            ctx.OMSetDepthStencilState(opt_com_ptr_as_raw(&self.depth_stencil_state), self.stencil_ref);
-
-            ctx.PSSetShaderResources(0, 1, &opt_com_ptr_as_raw(&self.shader_resource));
-            ctx.PSSetSamplers(0, 1, &opt_com_ptr_as_raw(&self.sampler));
-            ctx.PSSetShader(opt_com_ptr_as_raw(&self.ps_shader), &(*self.ps_instances).as_mut_ptr(), (*self.ps_instances).len() as u32);
-
-            ctx.VSSetShader(opt_com_ptr_as_raw(&self.vs_shader), &(*self.vs_instances).as_mut_ptr(), (*self.vs_instances).len() as u32);
-            ctx.VSSetConstantBuffers(0, 1, &opt_com_ptr_as_raw(&self.constant_buffer));
-
-            ctx.GSSetShader(opt_com_ptr_as_raw(&self.gs_shader), &(*self.gs_instances).as_mut_ptr(), (*self.gs_instances).len() as u32);
-
-            ctx.IASetPrimitiveTopology(self.topology);
-            ctx.IASetIndexBuffer(opt_com_ptr_as_raw(&self.index_buffer), self.index_buffer_format, self.index_buffer_offset);
-            ctx.IASetVertexBuffers(0,1, &opt_com_ptr_as_raw(&self.vertex_buffer), &self.vertex_buffer_stride, &self.vertex_buffer_offset);
-            ctx.IASetInputLayout(opt_com_ptr_as_raw(&self.input_layout));
-
-            for instance in self.vs_instances.as_ref().into_iter().flatten() {
-                instance.Release();
-            }
-            for instance in self.ps_instances.as_ref().into_iter().flatten() {
-                instance.Release();
-            }
-            for instance in self.gs_instances.as_ref().into_iter().flatten() {
-                instance.Release();
-            }
-        }
-    }
-}
-
-*/
 
 pub fn align_to_multiple(location: u64, alignment: u64) -> u64 {
     (location + (alignment - 1)) & (!(alignment - 1))

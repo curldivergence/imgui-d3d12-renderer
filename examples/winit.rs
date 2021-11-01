@@ -46,7 +46,9 @@ pub extern "C" fn debug_callback(
                 severity,
                 category,
                 id as i32,
-                description.to_str().expect("Cannot make Rust string from D3D12 layer message")
+                description
+                    .to_str()
+                    .expect("Cannot make Rust string from D3D12 layer message")
             );
         }
         MessageSeverity::Warning => {
@@ -55,7 +57,9 @@ pub extern "C" fn debug_callback(
                 severity,
                 category,
                 id as i32,
-                description.to_str().expect("Cannot make Rust string from D3D12 layer message")
+                description
+                    .to_str()
+                    .expect("Cannot make Rust string from D3D12 layer message")
             );
         }
         _ => {
@@ -64,7 +68,9 @@ pub extern "C" fn debug_callback(
                 severity,
                 category,
                 id as i32,
-                description.to_str().expect("Cannot make Rust string from D3D12 layer message")
+                description
+                    .to_str()
+                    .expect("Cannot make Rust string from D3D12 layer message")
             );
         }
     }
@@ -124,7 +130,9 @@ fn create_descriptor_heaps(device: &Device) -> (DescriptorHeap, DescriptorHeap) 
                 .set_num_descriptors(FRAMES_IN_FLIGHT as u32),
         )
         .expect("Cannot create RTV heap");
-    rtv_heap.set_name("RTV heap").expect("Cannot set RTV heap name");
+    rtv_heap
+        .set_name("RTV heap")
+        .expect("Cannot set RTV heap name");
 
     let srv_uav_heap = device
         .create_descriptor_heap(
@@ -134,7 +142,9 @@ fn create_descriptor_heaps(device: &Device) -> (DescriptorHeap, DescriptorHeap) 
                 .set_flags(DescriptorHeapFlags::ShaderVisible),
         )
         .expect("Cannot create srv_uav_heap");
-    srv_uav_heap.set_name("CBV_SRV heap").expect("Cannot set srv_uav_heap name");
+    srv_uav_heap
+        .set_name("CBV_SRV heap")
+        .expect("Cannot set srv_uav_heap name");
 
     (rtv_heap, srv_uav_heap)
 }
@@ -144,8 +154,9 @@ fn create_render_targets(
     rtv_heap: &DescriptorHeap,
     swapchain: &Swapchain,
 ) -> Vec<Resource> {
-    let clear_value =
-        ClearValue::default().set_format(Format::R8G8B8A8_UNorm).set_color([0.3, 0.3, 0.8, 1.]);
+    let clear_value = ClearValue::default()
+        .set_format(Format::R8G8B8A8_UNorm)
+        .set_color([0.3, 0.3, 0.8, 1.]);
 
     let render_target_desc = ResourceDesc::default()
         .set_dimension(ResourceDimension::Texture2D)
@@ -158,7 +169,9 @@ fn create_render_targets(
 
     for frame_idx in 0..FRAMES_IN_FLIGHT {
         render_targets.push(
-            swapchain.get_buffer(frame_idx as u32).expect("Cannot get buffer from swapchain"),
+            swapchain
+                .get_buffer(frame_idx as u32)
+                .expect("Cannot get buffer from swapchain"),
         );
     }
 
@@ -269,9 +282,12 @@ impl WinitSample {
 
         let render_targets = create_render_targets(&device, &rtv_heap, &swapchain);
 
-        let frame_fence =
-            device.create_fence(0, FenceFlags::None).expect("Cannot create frame_fence");
-        frame_fence.set_name("frame fence").expect("Cannot set name on fence");
+        let frame_fence = device
+            .create_fence(0, FenceFlags::None)
+            .expect("Cannot create frame_fence");
+        frame_fence
+            .set_name("frame fence")
+            .expect("Cannot set name on fence");
 
         let frame_fence_event = Win32Event::default();
 
@@ -302,35 +318,50 @@ impl WinitSample {
             .reset(&self.command_allocators[self.frame_index], None)
             .expect("Cannot reset command list");
 
-        self.command_list.resource_barrier(slice::from_ref(&ResourceBarrier::new_transition(
-            &ResourceTransitionBarrier::default()
-                .set_resource(&self.render_targets[self.frame_index])
-                .set_state_before(ResourceStates::Present)
-                .set_state_after(ResourceStates::RenderTarget),
-        )));
+        self.command_list
+            .resource_barrier(slice::from_ref(&ResourceBarrier::new_transition(
+                &ResourceTransitionBarrier::default()
+                    .set_resource(&self.render_targets[self.frame_index])
+                    .set_state_before(ResourceStates::Present)
+                    .set_state_after(ResourceStates::RenderTarget),
+            )));
 
-        self.command_list.set_descriptor_heaps(slice::from_ref(&self.srv_uav_heap));
+        self.command_list
+            .set_descriptor_heaps(slice::from_ref(&self.srv_uav_heap));
 
         self.command_list.clear_render_target_view(
-            self.rtv_heap.get_cpu_descriptor_handle_for_heap_start().advance(self.frame_index as u32),
+            self.rtv_heap
+                .get_cpu_descriptor_handle_for_heap_start()
+                .advance(self.frame_index as u32),
             [1., 0.3, 0.3, 1.],
             &[],
         );
+
+        let rtv_handles = [self
+            .rtv_heap
+            .get_cpu_descriptor_handle_for_heap_start()
+            .advance(self.frame_index as u32)];
+        self.command_list
+            .set_render_targets(&rtv_handles, false, None);
     }
 
     fn submit_commands(&mut self) {
         trace!("Submitting commands, frame idx {}", self.frame_index);
 
-        self.command_list.resource_barrier(slice::from_ref(&ResourceBarrier::new_transition(
-            &ResourceTransitionBarrier::default()
-                .set_resource(&self.render_targets[self.frame_index])
-                .set_state_before(ResourceStates::RenderTarget)
-                .set_state_after(ResourceStates::Present),
-        )));
+        self.command_list
+            .resource_barrier(slice::from_ref(&ResourceBarrier::new_transition(
+                &ResourceTransitionBarrier::default()
+                    .set_resource(&self.render_targets[self.frame_index])
+                    .set_state_before(ResourceStates::RenderTarget)
+                    .set_state_after(ResourceStates::Present),
+            )));
 
-        self.command_list.close().expect("Cannot close command list");
+        self.command_list
+            .close()
+            .expect("Cannot close command list");
 
-        self.command_queue.execute_command_lists(std::slice::from_ref(&self.command_list));
+        self.command_queue
+            .execute_command_lists(std::slice::from_ref(&self.command_list));
 
         self.frame_fence_value += 1;
 
@@ -349,11 +380,13 @@ impl WinitSample {
     }
 
     fn present(&mut self) {
-        self.swapchain.present(0, PresentFlags::None).unwrap_or_else(|err| {
-            error!("{}", err);
-            let real_error = self.device.get_device_removed_reason();
-            error!("Device removed reason: {}", real_error);
-        });
+        self.swapchain
+            .present(0, PresentFlags::None)
+            .unwrap_or_else(|err| {
+                error!("{}", err);
+                let real_error = self.device.get_device_removed_reason();
+                error!("Device removed reason: {}", real_error);
+            });
 
         trace!("moving to the next frame");
 
@@ -370,7 +403,12 @@ fn main() {
                 .takes_value(false)
                 .help("Break on validation errors"),
         )
-        .arg(clap::Arg::with_name("v").short("v").multiple(true).help("Verbosity level"))
+        .arg(
+            clap::Arg::with_name("v")
+                .short("v")
+                .multiple(true)
+                .help("Verbosity level"),
+        )
         .arg(
             clap::Arg::with_name("debug")
                 .short("d")
@@ -384,20 +422,22 @@ fn main() {
         0 => log_level = log::Level::Debug,
         1 | _ => log_level = log::Level::Trace,
     };
-    // simple_logger::init_with_level(log_level).unwrap();
-    simple_logger::init_with_level(log::Level::Trace).unwrap();
+    simple_logger::init_with_level(log_level).unwrap();
+    // simple_logger::init_with_level(log::Level::Trace).unwrap();
 
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title(app_title)
-        .with_inner_size(LogicalSize { width: WINDOW_WIDTH, height: WINDOW_HEIGHT })
+        .with_inner_size(LogicalSize {
+            width: WINDOW_WIDTH,
+            height: WINDOW_HEIGHT,
+        })
         .build(&event_loop)
         .unwrap();
 
     let mut app = WinitSample::new(
         window.hwnd(),
-        // command_args.is_present("debug")
-        true,
+        command_args.is_present("debug"), // true,
     );
 
     let mut imgui = imgui::Context::create();
@@ -409,7 +449,10 @@ fn main() {
     let hidpi_factor = platform.hidpi_factor();
     let font_size = (13.0 * hidpi_factor) as f32;
     imgui.fonts().add_font(&[FontSource::DefaultFontData {
-        config: Some(FontConfig { size_pixels: font_size, ..FontConfig::default() }),
+        config: Some(FontConfig {
+            size_pixels: font_size,
+            ..FontConfig::default()
+        }),
     }]);
 
     imgui.io_mut().font_global_scale = (1.0 / hidpi_factor) as f32;
@@ -433,7 +476,9 @@ fn main() {
         }
         Event::MainEventsCleared => {
             let io = imgui.io_mut();
-            platform.prepare_frame(io, &window).expect("Failed to start frame");
+            platform
+                .prepare_frame(io, &window)
+                .expect("Failed to start frame");
             window.request_redraw();
         }
         Event::RedrawRequested(_) => {
@@ -447,7 +492,11 @@ fn main() {
                     ui.text(im_str!("This...is...imgui-rs!"));
                     ui.separator();
                     let mouse_pos = ui.io().mouse_pos;
-                    ui.text(im_str!("Mouse Position: ({:.1},{:.1})", mouse_pos[0], mouse_pos[1]));
+                    ui.text(im_str!(
+                        "Mouse Position: ({:.1},{:.1})",
+                        mouse_pos[0],
+                        mouse_pos[1]
+                    ));
                 });
             ui.show_demo_window(&mut true);
             platform.prepare_render(&ui, &window);
@@ -456,9 +505,10 @@ fn main() {
             app.submit_commands();
             app.present();
         }
-        Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-            *control_flow = winit::event_loop::ControlFlow::Exit
-        }
+        Event::WindowEvent {
+            event: WindowEvent::CloseRequested,
+            ..
+        } => *control_flow = winit::event_loop::ControlFlow::Exit,
         Event::WindowEvent {
             event: WindowEvent::Resized(winit::dpi::PhysicalSize { height, width }),
             ..
