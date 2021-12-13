@@ -145,19 +145,19 @@ fn create_input_layout() -> Vec<InputElementDesc<'static>> {
             .unwrap()
             .set_format(Format::R32G32B32_Float)
             .set_input_slot(0)
-            .set_offset(Bytes::from(offset_of!(DrawVert, pos))),
+            .set_offset(ByteCount::from(offset_of!(DrawVert, pos))),
         InputElementDesc::default()
             .set_name("TEXCOORD")
             .unwrap()
             .set_format(Format::R32G32_Float)
             .set_input_slot(0)
-            .set_offset(Bytes::from(offset_of!(DrawVert, uv))),
+            .set_offset(ByteCount::from(offset_of!(DrawVert, uv))),
         InputElementDesc::default()
             .set_name("COLOR")
             .unwrap()
             .set_format(Format::R8G8B8A8_UNorm)
             .set_input_slot(0)
-            .set_offset(Bytes::from(offset_of!(DrawVert, col))),
+            .set_offset(ByteCount::from(offset_of!(DrawVert, col))),
     ]
 }
 
@@ -287,14 +287,14 @@ fn upload_texture(
     let source_location = TextureCopyLocation::new_placed_footprint(
         &staging_buffer,
         PlacedSubresourceFootprint::default()
-            .set_offset(Bytes(0))
+            .set_offset(ByteCount(0))
             .set_footprint(
                 SubresourceFootprint::default()
                     .set_width(texture_desc.width() as u32)
                     .set_height(texture_desc.height())
                     .set_depth(1)
                     .set_format(Format::R8G8B8A8_UNorm)
-                    .set_row_pitch(Bytes(align_to_multiple(
+                    .set_row_pitch(ByteCount(align_to_multiple(
                         texture_desc.width() as u64 * 4,
                         TEXTURE_DATA_PITCH_ALIGNMENT.0,
                     ))),
@@ -348,7 +348,7 @@ fn create_vertex_buffer(
     let vertex_buffer_view = VertexBufferView::default()
         .set_buffer_location(vertex_buffer.get_gpu_virtual_address())
         .set_size_in_bytes(vertex_buffer_size)
-        .set_stride_in_bytes(Bytes::from(std::mem::size_of::<DrawVert>()));
+        .set_stride_in_bytes(ByteCount::from(std::mem::size_of::<DrawVert>()));
 
     let mapped_data = vertex_buffer.map(0, None)?;
 
@@ -378,8 +378,8 @@ fn create_index_buffer(
         .set_buffer_location(index_buffer.get_gpu_virtual_address())
         .set_size_in_bytes(index_buffer_size)
         .set_format(match size_of!(DrawIdx) {
-            Bytes(2) => Format::R16_UInt,
-            Bytes(4) => Format::R32_UInt,
+            ByteCount(2) => Format::R16_UInt,
+            ByteCount(4) => Format::R32_UInt,
             _ => return Err(IDRError::WrongIndexSize),
         });
 
@@ -388,12 +388,11 @@ fn create_index_buffer(
     Ok((index_buffer, index_buffer_view, mapped_data))
 }
 
-fn create_gpu_handle_from_texture_id(handle_size: u32, id: TextureId) -> GpuDescriptorHandle {
+fn create_gpu_handle_from_texture_id(id: TextureId) -> GpuDescriptorHandle {
     GpuDescriptorHandle {
         hw_handle: D3D12_GPU_DESCRIPTOR_HANDLE {
             ptr: id.id() as u64,
         },
-        handle_size,
     }
 }
 
@@ -558,10 +557,7 @@ impl Renderer {
                         if texture_id != last_tex {
                             command_list.set_graphics_root_descriptor_table(
                                 1,
-                                create_gpu_handle_from_texture_id(
-                                    self.font_tex_gpu_descriptor_handle.handle_size,
-                                    texture_id,
-                                ),
+                                create_gpu_handle_from_texture_id(texture_id),
                             );
 
                             last_tex = texture_id;

@@ -153,6 +153,7 @@ fn create_render_targets(
     device: &Device,
     rtv_heap: &DescriptorHeap,
     swapchain: &Swapchain,
+    rtv_descriptor_handle_size: ByteCount,
 ) -> Vec<Resource> {
     let clear_value = ClearValue::default()
         .set_format(Format::R8G8B8A8_UNorm)
@@ -179,7 +180,7 @@ fn create_render_targets(
     for frame_idx in 0..FRAMES_IN_FLIGHT {
         device.create_render_target_view(&render_targets[frame_idx as usize], rtv_handle);
 
-        rtv_handle = rtv_handle.advance(1);
+        rtv_handle = rtv_handle.advance(1, rtv_descriptor_handle_size);
     }
 
     trace!("created command allocators");
@@ -198,7 +199,9 @@ struct WinitSample {
     render_targets: Vec<Resource>,
     frame_index: usize,
     rtv_heap: DescriptorHeap,
+    rtv_descriptor_handle_size: ByteCount,
     srv_uav_heap: DescriptorHeap,
+    srv_descriptor_handle_size: ByteCount,
 
     frame_fence: Fence,
     frame_fence_value: u64,
@@ -279,8 +282,13 @@ impl WinitSample {
         trace!("Swapchain returned frame index {}", frame_index);
 
         let (rtv_heap, srv_uav_heap) = create_descriptor_heaps(&device);
+        let rtv_descriptor_handle_size =
+            device.get_descriptor_handle_increment_size(DescriptorHeapType::Rtv);
+        let srv_descriptor_handle_size =
+            device.get_descriptor_handle_increment_size(DescriptorHeapType::CbvSrvUav);
 
-        let render_targets = create_render_targets(&device, &rtv_heap, &swapchain);
+        let render_targets =
+            create_render_targets(&device, &rtv_heap, &swapchain, rtv_descriptor_handle_size);
 
         let frame_fence = device
             .create_fence(0, FenceFlags::None)
@@ -302,7 +310,9 @@ impl WinitSample {
             render_targets,
             frame_index,
             rtv_heap,
+            rtv_descriptor_handle_size,
             srv_uav_heap,
+            srv_descriptor_handle_size,
 
             frame_fence,
             frame_fence_value: 0,
@@ -332,7 +342,7 @@ impl WinitSample {
         self.command_list.clear_render_target_view(
             self.rtv_heap
                 .get_cpu_descriptor_handle_for_heap_start()
-                .advance(self.frame_index as u32),
+                .advance(self.frame_index as u32, self.rtv_descriptor_handle_size),
             [1., 0.3, 0.3, 1.],
             &[],
         );
@@ -340,7 +350,7 @@ impl WinitSample {
         let rtv_handles = [self
             .rtv_heap
             .get_cpu_descriptor_handle_for_heap_start()
-            .advance(self.frame_index as u32)];
+            .advance(self.frame_index as u32, self.rtv_descriptor_handle_size)];
         self.command_list
             .set_render_targets(&rtv_handles, false, None);
     }
