@@ -12,7 +12,7 @@ categories = ["gui", "rendering"]
 
 [dependencies]
 # rusty-d3d12 = { path = "../rusty-d3d12" }
-rusty-d3d12 = "0.2.6"
+rusty-d3d12 = "0.3.0"
 imgui = "0.8"
 thiserror = "1.0"
 log = "0.4"

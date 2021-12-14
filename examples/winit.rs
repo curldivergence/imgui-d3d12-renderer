@@ -156,12 +156,12 @@ fn create_render_targets(
     rtv_descriptor_handle_size: ByteCount,
 ) -> Vec<Resource> {
     let clear_value = ClearValue::default()
-        .set_format(Format::R8G8B8A8_UNorm)
+        .set_format(Format::R8G8B8A8Unorm)
         .set_color([0.3, 0.3, 0.8, 1.]);
 
     let render_target_desc = ResourceDesc::default()
         .set_dimension(ResourceDimension::Texture2D)
-        .set_format(Format::R8G8B8A8_UNorm)
+        .set_format(Format::R8G8B8A8Unorm)
         .set_width(WINDOW_WIDTH.into())
         .set_height(WINDOW_HEIGHT)
         .set_flags(ResourceFlags::AllowRenderTarget);

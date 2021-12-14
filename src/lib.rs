@@ -129,8 +129,8 @@ fn create_pipeline_state(
         )
         .set_depth_stencil_state(&DepthStencilDesc::default())
         .set_primitive_topology_type(PrimitiveTopologyType::Triangle)
-        .set_rtv_formats(&[Format::R8G8B8A8_UNorm])
-        .set_dsv_format(Format::D32_Float);
+        .set_rtv_formats(&[Format::R8G8B8A8Unorm])
+        .set_dsv_format(Format::D32Float);
 
     device
         .create_graphics_pipeline_state(&pso_desc)
@@ -143,19 +143,19 @@ fn create_input_layout() -> Vec<InputElementDesc<'static>> {
             // ToDo: "POSITION\0" on lib side would allow to get rid of allocations
             .set_name("POSITION")
             .unwrap()
-            .set_format(Format::R32G32B32_Float)
+            .set_format(Format::R32G32B32Float)
             .set_input_slot(0)
             .set_offset(ByteCount::from(offset_of!(DrawVert, pos))),
         InputElementDesc::default()
             .set_name("TEXCOORD")
             .unwrap()
-            .set_format(Format::R32G32_Float)
+            .set_format(Format::R32G32Float)
             .set_input_slot(0)
             .set_offset(ByteCount::from(offset_of!(DrawVert, uv))),
         InputElementDesc::default()
             .set_name("COLOR")
             .unwrap()
-            .set_format(Format::R8G8B8A8_UNorm)
+            .set_format(Format::R8G8B8A8Unorm)
             .set_input_slot(0)
             .set_offset(ByteCount::from(offset_of!(DrawVert, col))),
     ]
@@ -224,7 +224,7 @@ fn create_font_texture(
         .set_width(fa_tex.width as u64)
         .set_height(fa_tex.height)
         .set_mip_levels(1)
-        .set_format(Format::R8G8B8A8_UNorm);
+        .set_format(Format::R8G8B8A8Unorm);
 
     let (staging_resource, texture_resource) = upload_texture(device, &texture_desc, fa_tex.data)?;
 
@@ -293,7 +293,7 @@ fn upload_texture(
                     .set_width(texture_desc.width() as u32)
                     .set_height(texture_desc.height())
                     .set_depth(1)
-                    .set_format(Format::R8G8B8A8_UNorm)
+                    .set_format(Format::R8G8B8A8Unorm)
                     .set_row_pitch(ByteCount(align_to_multiple(
                         texture_desc.width() as u64 * 4,
                         TEXTURE_DATA_PITCH_ALIGNMENT.0,
@@ -378,8 +378,8 @@ fn create_index_buffer(
         .set_buffer_location(index_buffer.get_gpu_virtual_address())
         .set_size_in_bytes(index_buffer_size)
         .set_format(match size_of!(DrawIdx) {
-            ByteCount(2) => Format::R16_UInt,
-            ByteCount(4) => Format::R32_UInt,
+            ByteCount(2) => Format::R16Uint,
+            ByteCount(4) => Format::R32Uint,
             _ => return Err(IDRError::WrongIndexSize),
         });
 
