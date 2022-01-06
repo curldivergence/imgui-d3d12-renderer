@@ -1,10 +1,12 @@
 # imgui-d3d12-renderer
 
-D3D12 renderer for [imgui-rs](https://github.com/Gekkio/imgui-rs).
+D3D12 renderer for [imgui-rs](https://github.com/Gekkio/imgui-rs) implemented using [rusty-d3d12](https://github.com/curldivergence/rusty-d3d12).
+
+![Example screenshot](example.png)
 
 ## Usage
 
-TBD (see `examples/winit.rs`)
+TBD (see [example](examples/winit.rs))
 
 ## Documentation
 

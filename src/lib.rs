@@ -563,12 +563,11 @@ impl Renderer {
                             last_tex = texture_id;
                         }
 
-                        let scissor_rect = Rect(D3D12_RECT {
-                            left: ((clip_rect[0] - clip_off[0]) * clip_scale[0]) as i32,
-                            top: ((clip_rect[1] - clip_off[1]) * clip_scale[1]) as i32,
-                            right: ((clip_rect[2] - clip_off[0]) * clip_scale[0]) as i32,
-                            bottom: ((clip_rect[3] - clip_off[1]) * clip_scale[1]) as i32,
-                        });
+                        let scissor_rect = Rect::default()
+                            .set_left(((clip_rect[0] - clip_off[0]) * clip_scale[0]) as i32)
+                            .set_top(((clip_rect[1] - clip_off[1]) * clip_scale[1]) as i32)
+                            .set_right(((clip_rect[2] - clip_off[0]) * clip_scale[0]) as i32)
+                            .set_bottom(((clip_rect[3] - clip_off[1]) * clip_scale[1]) as i32);
 
                         command_list.set_scissor_rects(slice::from_ref(&scissor_rect));
 
@@ -600,14 +599,9 @@ impl Renderer {
 
         let current_resources = &self.frame_resources[self.current_frame_index];
 
-        let viewport = Viewport(D3D12_VIEWPORT {
-            TopLeftX: 0.0,
-            TopLeftY: 0.0,
-            Width: draw_data.display_size[0] * draw_data.framebuffer_scale[0],
-            Height: draw_data.display_size[1] * draw_data.framebuffer_scale[1],
-            MinDepth: 0.0,
-            MaxDepth: 1.0,
-        });
+        let viewport = Viewport::default()
+            .set_width(draw_data.display_size[0] * draw_data.framebuffer_scale[0])
+            .set_height(draw_data.display_size[1] * draw_data.framebuffer_scale[1]);
 
         command_list.set_viewports(slice::from_ref(&viewport));
 

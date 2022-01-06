@@ -244,9 +244,12 @@ impl WinitSample {
                 .expect("Cannot create debug info queue"),
             );
 
+            // Commented out since it's only supported on Win 11 (rusty-d3d12 exposes it under `debug-callback` feature)
+            /*
             temp_info_queue
                 .register_callback(debug_callback, MessageCallbackFlags::FlagNone)
                 .expect("Cannot set debug callback on info queue");
+            */
 
             info_queue = Some(temp_info_queue);
         } else {
