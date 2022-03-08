@@ -109,10 +109,10 @@ fn create_swapchain(
     command_queue: &CommandQueue,
     hwnd: *mut std::ffi::c_void,
 ) -> Swapchain {
-    let swapchain_desc = SwapchainDesc::default()
-        .set_width(WINDOW_WIDTH)
-        .set_height(WINDOW_HEIGHT)
-        .set_buffer_count(FRAMES_IN_FLIGHT as u32);
+    let swapchain_desc = SwapChainDesc::default()
+        .with_width(WINDOW_WIDTH)
+        .with_height(WINDOW_HEIGHT)
+        .with_buffer_count(FRAMES_IN_FLIGHT as u32);
     let swapchain = factory
         .create_swapchain(command_queue, hwnd as *mut HWND__, &swapchain_desc)
         .expect("Cannot create swapchain");
@@ -126,8 +126,8 @@ fn create_descriptor_heaps(device: &Device) -> (DescriptorHeap, DescriptorHeap) 
     let rtv_heap = device
         .create_descriptor_heap(
             &DescriptorHeapDesc::default()
-                .set_heap_type(DescriptorHeapType::Rtv)
-                .set_num_descriptors(FRAMES_IN_FLIGHT as u32),
+                .with_heap_type(DescriptorHeapType::Rtv)
+                .with_num_descriptors(FRAMES_IN_FLIGHT as u32),
         )
         .expect("Cannot create RTV heap");
     rtv_heap
@@ -137,9 +137,9 @@ fn create_descriptor_heaps(device: &Device) -> (DescriptorHeap, DescriptorHeap) 
     let srv_uav_heap = device
         .create_descriptor_heap(
             &DescriptorHeapDesc::default()
-                .set_heap_type(DescriptorHeapType::CbvSrvUav)
-                .set_num_descriptors(1)
-                .set_flags(DescriptorHeapFlags::ShaderVisible),
+                .with_heap_type(DescriptorHeapType::CbvSrvUav)
+                .with_num_descriptors(1)
+                .with_flags(DescriptorHeapFlags::ShaderVisible),
         )
         .expect("Cannot create srv_uav_heap");
     srv_uav_heap
@@ -156,15 +156,15 @@ fn create_render_targets(
     rtv_descriptor_handle_size: ByteCount,
 ) -> Vec<Resource> {
     let clear_value = ClearValue::default()
-        .set_format(Format::R8G8B8A8Unorm)
-        .set_color([0.3, 0.3, 0.8, 1.]);
+        .with_format(Format::R8G8B8A8Unorm)
+        .with_color([0.3, 0.3, 0.8, 1.]);
 
     let render_target_desc = ResourceDesc::default()
-        .set_dimension(ResourceDimension::Texture2D)
-        .set_format(Format::R8G8B8A8Unorm)
-        .set_width(WINDOW_WIDTH.into())
-        .set_height(WINDOW_HEIGHT)
-        .set_flags(ResourceFlags::AllowRenderTarget);
+        .with_dimension(ResourceDimension::Texture2D)
+        .with_format(Format::R8G8B8A8Unorm)
+        .with_width(WINDOW_WIDTH.into())
+        .with_height(WINDOW_HEIGHT)
+        .with_flags(ResourceFlags::AllowRenderTarget);
 
     let mut render_targets = vec![];
 
@@ -276,7 +276,7 @@ impl WinitSample {
 
         let command_queue = device
             .create_command_queue(
-                &CommandQueueDesc::default().set_queue_type(CommandListType::Direct),
+                &CommandQueueDesc::default().with_queue_type(CommandListType::Direct),
             )
             .expect("Cannot create direct command queue");
 
@@ -334,9 +334,9 @@ impl WinitSample {
         self.command_list
             .resource_barrier(slice::from_ref(&ResourceBarrier::new_transition(
                 &ResourceTransitionBarrier::default()
-                    .set_resource(&self.render_targets[self.frame_index])
-                    .set_state_before(ResourceStates::Present)
-                    .set_state_after(ResourceStates::RenderTarget),
+                    .with_resource(&self.render_targets[self.frame_index])
+                    .with_state_before(ResourceStates::Present)
+                    .with_state_after(ResourceStates::RenderTarget),
             )));
 
         self.command_list
@@ -364,9 +364,9 @@ impl WinitSample {
         self.command_list
             .resource_barrier(slice::from_ref(&ResourceBarrier::new_transition(
                 &ResourceTransitionBarrier::default()
-                    .set_resource(&self.render_targets[self.frame_index])
-                    .set_state_before(ResourceStates::RenderTarget)
-                    .set_state_after(ResourceStates::Present),
+                    .with_resource(&self.render_targets[self.frame_index])
+                    .with_state_before(ResourceStates::RenderTarget)
+                    .with_state_after(ResourceStates::Present),
             )));
 
         self.command_list

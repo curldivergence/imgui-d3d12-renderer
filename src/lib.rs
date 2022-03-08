@@ -102,35 +102,35 @@ fn create_pipeline_state(
     pixel_shader: Vec<u8>,
     device: &Device,
 ) -> IDRResult<PipelineState> {
-    let vs_bytecode = ShaderBytecode::from_bytes(&vertex_shader);
-    let ps_bytecode = ShaderBytecode::from_bytes(&pixel_shader);
+    let vs_bytecode = ShaderBytecode::new(&vertex_shader);
+    let ps_bytecode = ShaderBytecode::new(&pixel_shader);
 
-    let input_layout = InputLayoutDesc::default().from_input_elements(&input_layout);
+    let input_layout = InputLayoutDesc::default().with_input_elements(&input_layout);
     let pso_desc = GraphicsPipelineStateDesc::default()
-        .set_input_layout(&input_layout)
-        .set_root_signature(root_signature)
-        .set_vs_bytecode(&vs_bytecode)
-        .set_ps_bytecode(&ps_bytecode)
-        .set_rasterizer_state(
-            &RasterizerDesc::default()
-                .set_fill_mode(FillMode::Solid)
-                .set_depth_clip_enable(true),
+        .with_input_layout(&input_layout)
+        .with_root_signature(root_signature)
+        .with_vs_bytecode(&vs_bytecode)
+        .with_ps_bytecode(&ps_bytecode)
+        .with_rasterizer_state(
+            RasterizerDesc::default()
+                .with_fill_mode(FillMode::Solid)
+                .with_depth_clip_enable(true),
         )
-        .set_blend_state(
-            &BlendDesc::default().set_render_targets(&[RenderTargetBlendDesc::default()
-                .set_blend_enable(true)
-                .set_src_blend(Blend::SrcAlpha)
-                .set_dest_blend(Blend::InvSrcAlpha)
-                .set_blend_op(BlendOp::Add)
-                .set_src_blend_alpha(Blend::InvDestAlpha)
-                .set_dest_blend_alpha(Blend::One)
-                .set_blend_op_alpha(BlendOp::Add)
-                .set_render_target_write_mask(ColorWriteEnable::EnableAll)]),
+        .with_blend_state(
+            BlendDesc::default().with_render_targets(&[RenderTargetBlendDesc::default()
+                .with_blend_enable(true)
+                .with_src_blend(Blend::SrcAlpha)
+                .with_dest_blend(Blend::InvSrcAlpha)
+                .with_blend_op(BlendOp::Add)
+                .with_src_blend_alpha(Blend::InvDestAlpha)
+                .with_dest_blend_alpha(Blend::One)
+                .with_blend_op_alpha(BlendOp::Add)
+                .with_render_target_write_mask(ColorWriteEnable::EnableAll)]),
         )
-        .set_depth_stencil_state(&DepthStencilDesc::default())
-        .set_primitive_topology_type(PrimitiveTopologyType::Triangle)
-        .set_rtv_formats(&[Format::R8G8B8A8Unorm])
-        .set_dsv_format(Format::D32Float);
+        .with_depth_stencil_state(DepthStencilDesc::default())
+        .with_primitive_topology_type(PrimitiveTopologyType::Triangle)
+        .with_rtv_formats(&[Format::R8G8B8A8Unorm])
+        .with_dsv_format(Format::D32Float);
 
     device
         .create_graphics_pipeline_state(&pso_desc)
@@ -141,56 +141,56 @@ fn create_input_layout() -> Vec<InputElementDesc<'static>> {
     vec![
         InputElementDesc::default()
             // ToDo: "POSITION\0" on lib side would allow to get rid of allocations
-            .set_name("POSITION")
+            .with_semantic_name("POSITION")
             .unwrap()
-            .set_format(Format::R32G32B32Float)
-            .set_input_slot(0)
-            .set_offset(ByteCount::from(offset_of!(DrawVert, pos))),
+            .with_format(Format::R32G32B32Float)
+            .with_input_slot(0)
+            .with_aligned_byte_offset(ByteCount::from(offset_of!(DrawVert, pos))),
         InputElementDesc::default()
-            .set_name("TEXCOORD")
+            .with_semantic_name("TEXCOORD")
             .unwrap()
-            .set_format(Format::R32G32Float)
-            .set_input_slot(0)
-            .set_offset(ByteCount::from(offset_of!(DrawVert, uv))),
+            .with_format(Format::R32G32Float)
+            .with_input_slot(0)
+            .with_aligned_byte_offset(ByteCount::from(offset_of!(DrawVert, uv))),
         InputElementDesc::default()
-            .set_name("COLOR")
+            .with_semantic_name("COLOR")
             .unwrap()
-            .set_format(Format::R8G8B8A8Unorm)
-            .set_input_slot(0)
-            .set_offset(ByteCount::from(offset_of!(DrawVert, col))),
+            .with_format(Format::R8G8B8A8Unorm)
+            .with_input_slot(0)
+            .with_aligned_byte_offset(ByteCount::from(offset_of!(DrawVert, col))),
     ]
 }
 
 fn setup_root_signature(device: &Device) -> IDRResult<RootSignature> {
     let ranges = [DescriptorRange::default()
-        .set_range_type(DescriptorRangeType::Srv)
-        .set_num_descriptors(1)
-        .set_flags(DescriptorRangeFlags::DataVolatile)];
+        .with_range_type(DescriptorRangeType::Srv)
+        .with_num_descriptors(1)
+        .with_flags(DescriptorRangeFlags::DataVolatile)];
 
     let static_sampler_desc = StaticSamplerDesc::default()
-        .set_filter(Filter::MinMagMipLinear)
-        .set_address_u(TextureAddressMode::Wrap)
-        .set_address_v(TextureAddressMode::Wrap)
-        .set_address_w(TextureAddressMode::Wrap)
-        .set_comparison_func(ComparisonFunc::Always)
-        .set_border_color(StaticBorderColor::TransparentBlack)
-        .set_shader_visibility(ShaderVisibility::Pixel);
+        .with_filter(Filter::MinMagMipLinear)
+        .with_address_u(TextureAddressMode::Wrap)
+        .with_address_v(TextureAddressMode::Wrap)
+        .with_address_w(TextureAddressMode::Wrap)
+        .with_comparison_func(ComparisonFunc::Always)
+        .with_border_color(StaticBorderColor::TransparentBlack)
+        .with_shader_visibility(ShaderVisibility::Pixel);
 
-    let descriptor_table = RootDescriptorTable::default().set_descriptor_ranges(&ranges);
+    let descriptor_table = RootDescriptorTable::default().with_descriptor_ranges(&ranges);
 
     let root_parameters = [
         RootParameter::default()
-            .new_constants(&RootConstants::default().set_num_32_bit_values(16))
-            .set_shader_visibility(ShaderVisibility::Vertex),
+            .new_constants(&RootConstants::default().with_num_32_bit_values(16))
+            .with_shader_visibility(ShaderVisibility::Vertex),
         RootParameter::default()
             .new_descriptor_table(&descriptor_table)
-            .set_shader_visibility(ShaderVisibility::All),
+            .with_shader_visibility(ShaderVisibility::All),
     ];
-    let root_signature_desc = VersionedRootSignatureDesc::default().set_desc_1_1(
+    let root_signature_desc = VersionedRootSignatureDesc::default().with_desc_1_1(
         &RootSignatureDesc::default()
-            .set_parameters(&root_parameters)
-            .set_static_samplers(slice::from_ref(&static_sampler_desc))
-            .set_flags(RootSignatureFlags::AllowInputAssemblerInputLayout),
+            .with_parameters(&root_parameters)
+            .with_static_samplers(slice::from_ref(&static_sampler_desc))
+            .with_flags(RootSignatureFlags::AllowInputAssemblerInputLayout),
     );
 
     let (serialized_signature, serialization_result) =
@@ -203,7 +203,7 @@ fn setup_root_signature(device: &Device) -> IDRResult<RootSignature> {
 
     let root_signature = device.create_root_signature(
         0,
-        &ShaderBytecode::from_bytes(serialized_signature.get_buffer()),
+        &ShaderBytecode::new(serialized_signature.get_buffer()),
     )?;
 
     root_signature.set_name("ImGUI Root Signature")?;
@@ -220,11 +220,11 @@ fn create_font_texture(
     let fa_tex = fonts.build_rgba32_texture();
 
     let texture_desc = ResourceDesc::default()
-        .set_dimension(ResourceDimension::Texture2D)
-        .set_width(fa_tex.width as u64)
-        .set_height(fa_tex.height)
-        .set_mip_levels(1)
-        .set_format(Format::R8G8B8A8Unorm);
+        .with_dimension(ResourceDimension::Texture2D)
+        .with_width(fa_tex.width as u64)
+        .with_height(fa_tex.height)
+        .with_mip_levels(1)
+        .with_format(Format::R8G8B8A8Unorm);
 
     let (staging_resource, texture_resource) = upload_texture(device, &texture_desc, fa_tex.data)?;
 
@@ -242,8 +242,8 @@ fn upload_texture(
 ) -> IDRResult<(Resource, Resource)> {
     let command_queue = device.create_command_queue(
         &CommandQueueDesc::default()
-            .set_queue_type(CommandListType::Direct)
-            .set_flags(CommandQueueFlags::None),
+            .with_queue_type(CommandListType::Direct)
+            .with_flags(CommandQueueFlags::None),
     )?;
 
     let command_allocator = device.create_command_allocator(CommandListType::Direct)?;
@@ -256,12 +256,12 @@ fn upload_texture(
     let event = Win32Event::default();
 
     let staging_buffer_desc = ResourceDesc::default()
-        .set_dimension(ResourceDimension::Buffer)
-        .set_layout(TextureLayout::RowMajor)
-        .set_width(texture_desc.width() * texture_desc.height() as u64 * 4); // RGBA8
+        .with_dimension(ResourceDimension::Buffer)
+        .with_layout(TextureLayout::RowMajor)
+        .with_width(texture_desc.width() * texture_desc.height() as u64 * 4); // RGBA8
 
     let staging_buffer = device.create_committed_resource(
-        &HeapProperties::default().set_heap_type(HeapType::Upload),
+        &HeapProperties::default().with_heap_type(HeapType::Upload),
         HeapFlags::None,
         &staging_buffer_desc,
         ResourceStates::GenericRead,
@@ -277,7 +277,7 @@ fn upload_texture(
     staging_buffer.unmap(0, None);
 
     let texture_resource = device.create_committed_resource(
-        &HeapProperties::default().set_heap_type(HeapType::Default),
+        &HeapProperties::default().with_heap_type(HeapType::Default),
         HeapFlags::None,
         texture_desc,
         ResourceStates::CopyDest,
@@ -287,14 +287,14 @@ fn upload_texture(
     let source_location = TextureCopyLocation::new_placed_footprint(
         &staging_buffer,
         PlacedSubresourceFootprint::default()
-            .set_offset(ByteCount(0))
-            .set_footprint(
+            .with_offset(ByteCount(0))
+            .with_footprint(
                 SubresourceFootprint::default()
-                    .set_width(texture_desc.width() as u32)
-                    .set_height(texture_desc.height())
-                    .set_depth(1)
-                    .set_format(Format::R8G8B8A8Unorm)
-                    .set_row_pitch(ByteCount(align_to_multiple(
+                    .with_width(texture_desc.width() as u32)
+                    .with_height(texture_desc.height())
+                    .with_depth(1)
+                    .with_format(Format::R8G8B8A8Unorm)
+                    .with_row_pitch(ByteCount(align_to_multiple(
                         texture_desc.width() as u64 * 4,
                         TEXTURE_DATA_PITCH_ALIGNMENT.0,
                     ))),
@@ -307,9 +307,9 @@ fn upload_texture(
 
     command_list.resource_barrier(std::slice::from_ref(&ResourceBarrier::new_transition(
         &ResourceTransitionBarrier::default()
-            .set_resource(&texture_resource)
-            .set_state_before(ResourceStates::CopyDest)
-            .set_state_after(ResourceStates::PixelShaderResource),
+            .with_resource(&texture_resource)
+            .with_state_before(ResourceStates::CopyDest)
+            .with_state_after(ResourceStates::PixelShaderResource),
     )));
 
     command_list.close()?;
@@ -333,12 +333,12 @@ fn create_vertex_buffer(
     let vertex_buffer_size = (vertex_count + VERTEX_BUF_ADD_CAPACITY) * size_of!(DrawVert);
 
     let vertex_buffer = device.create_committed_resource(
-        &HeapProperties::default().set_heap_type(HeapType::Upload),
+        &HeapProperties::default().with_heap_type(HeapType::Upload),
         HeapFlags::None,
         &ResourceDesc::default()
-            .set_dimension(ResourceDimension::Buffer)
-            .set_layout(TextureLayout::RowMajor)
-            .set_width(vertex_buffer_size.0),
+            .with_dimension(ResourceDimension::Buffer)
+            .with_layout(TextureLayout::RowMajor)
+            .with_width(vertex_buffer_size.0),
         ResourceStates::GenericRead,
         None,
     )?;
@@ -346,9 +346,9 @@ fn create_vertex_buffer(
     vertex_buffer.set_name("ImGUI vertex buffer")?;
 
     let vertex_buffer_view = VertexBufferView::default()
-        .set_buffer_location(vertex_buffer.get_gpu_virtual_address())
-        .set_size_in_bytes(vertex_buffer_size)
-        .set_stride_in_bytes(ByteCount::from(std::mem::size_of::<DrawVert>()));
+        .with_buffer_location(vertex_buffer.get_gpu_virtual_address())
+        .with_size_in_bytes(vertex_buffer_size)
+        .with_stride_in_bytes(ByteCount::from(std::mem::size_of::<DrawVert>()));
 
     let mapped_data = vertex_buffer.map(0, None)?;
 
@@ -362,12 +362,12 @@ fn create_index_buffer(
     let index_buffer_size = (index_count + INDEX_BUF_ADD_CAPACITY) * size_of!(DrawIdx);
 
     let index_buffer = device.create_committed_resource(
-        &HeapProperties::default().set_heap_type(HeapType::Upload),
+        &HeapProperties::default().with_heap_type(HeapType::Upload),
         HeapFlags::None,
         &ResourceDesc::default()
-            .set_dimension(ResourceDimension::Buffer)
-            .set_layout(TextureLayout::RowMajor)
-            .set_width(index_buffer_size.0),
+            .with_dimension(ResourceDimension::Buffer)
+            .with_layout(TextureLayout::RowMajor)
+            .with_width(index_buffer_size.0),
         ResourceStates::GenericRead,
         None,
     )?;
@@ -375,9 +375,9 @@ fn create_index_buffer(
     index_buffer.set_name("ImGUI index buffer")?;
 
     let index_buffer_view = IndexBufferView::default()
-        .set_buffer_location(index_buffer.get_gpu_virtual_address())
-        .set_size_in_bytes(index_buffer_size)
-        .set_format(match size_of!(DrawIdx) {
+        .with_buffer_location(index_buffer.get_gpu_virtual_address())
+        .with_size_in_bytes(index_buffer_size)
+        .with_format(match size_of!(DrawIdx) {
             ByteCount(2) => Format::R16Uint,
             ByteCount(4) => Format::R32Uint,
             _ => return Err(IDRError::WrongIndexSize),
@@ -564,10 +564,10 @@ impl Renderer {
                         }
 
                         let scissor_rect = Rect::default()
-                            .set_left(((clip_rect[0] - clip_off[0]) * clip_scale[0]) as i32)
-                            .set_top(((clip_rect[1] - clip_off[1]) * clip_scale[1]) as i32)
-                            .set_right(((clip_rect[2] - clip_off[0]) * clip_scale[0]) as i32)
-                            .set_bottom(((clip_rect[3] - clip_off[1]) * clip_scale[1]) as i32);
+                            .with_left(((clip_rect[0] - clip_off[0]) * clip_scale[0]) as i32)
+                            .with_top(((clip_rect[1] - clip_off[1]) * clip_scale[1]) as i32)
+                            .with_right(((clip_rect[2] - clip_off[0]) * clip_scale[0]) as i32)
+                            .with_bottom(((clip_rect[3] - clip_off[1]) * clip_scale[1]) as i32);
 
                         command_list.set_scissor_rects(slice::from_ref(&scissor_rect));
 
@@ -600,8 +600,8 @@ impl Renderer {
         let current_resources = &self.frame_resources[self.current_frame_index];
 
         let viewport = Viewport::default()
-            .set_width(draw_data.display_size[0] * draw_data.framebuffer_scale[0])
-            .set_height(draw_data.display_size[1] * draw_data.framebuffer_scale[1]);
+            .with_width(draw_data.display_size[0] * draw_data.framebuffer_scale[0])
+            .with_height(draw_data.display_size[1] * draw_data.framebuffer_scale[1]);
 
         command_list.set_viewports(slice::from_ref(&viewport));
 
