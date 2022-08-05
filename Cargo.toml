@@ -9,11 +9,11 @@ repository = "https://github.com/curldivergence/imgui-d3d12-renderer"
 license = "MIT"
 readme = "README.md"
 categories = ["gui", "rendering"]
-# publish = false
+publish = false
 
 [dependencies]
-# rusty-d3d12 = { path = "../rusty-d3d12" }
-rusty-d3d12 = "0.5.1"
+rusty-d3d12 = { path = "../rusty-d3d12" }
+# rusty-d3d12 = "0.5.1"
 imgui = "0.8"
 thiserror = "1.0"
 log = "0.4"
