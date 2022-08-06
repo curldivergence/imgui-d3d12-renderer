@@ -201,10 +201,8 @@ fn setup_root_signature(device: &Device) -> IDRResult<RootSignature> {
         &serialization_result.err().unwrap()
     );
 
-    let root_signature = device.create_root_signature(
-        0,
-        &ShaderBytecode::new(serialized_signature.get_buffer()),
-    )?;
+    let root_signature =
+        device.create_root_signature(0, &ShaderBytecode::new(serialized_signature.get_buffer()))?;
 
     root_signature.set_name("ImGUI Root Signature")?;
 
@@ -434,6 +432,7 @@ pub struct Renderer {
     frame_count: usize,
     current_frame_index: usize,
     frame_resources: Vec<FrameResources>,
+    descriptor_heap: DescriptorHeap,
     root_signature: RootSignature,
     pipeline_state: PipelineState,
     staging_resource: Resource,
@@ -448,8 +447,8 @@ impl Renderer {
         im_ctx: &mut imgui::Context,
         device: Device,
         frame_count: usize,
-        font_tex_cpu_descriptor_handle: CpuDescriptorHandle,
-        font_tex_gpu_descriptor_handle: GpuDescriptorHandle,
+        descriptor_heap: DescriptorHeap,
+        font_tex_heap_index: u32,
     ) -> IDRResult<Self> {
         let (vertex_shader, pixel_shader) = create_shaders()?;
 
@@ -462,6 +461,20 @@ impl Renderer {
             pixel_shader,
             &device,
         )?;
+
+        let font_tex_cpu_descriptor_handle = descriptor_heap
+            .get_cpu_descriptor_handle_for_heap_start()
+            .advance(
+                font_tex_heap_index,
+                device.get_descriptor_handle_increment_size(DescriptorHeapType::CbvSrvUav),
+            );
+
+        let font_tex_gpu_descriptor_handle = descriptor_heap
+            .get_gpu_descriptor_handle_for_heap_start()
+            .advance(
+                font_tex_heap_index,
+                device.get_descriptor_handle_increment_size(DescriptorHeapType::CbvSrvUav),
+            );
 
         let (staging_resource, texture_resource) = create_font_texture(
             im_ctx.fonts(),
@@ -484,6 +497,7 @@ impl Renderer {
             frame_count,
             current_frame_index: 0,
             frame_resources,
+            descriptor_heap,
             root_signature,
             pipeline_state,
             staging_resource,
@@ -540,6 +554,8 @@ impl Renderer {
 
         let mut last_tex =
             TextureId::from(self.font_tex_gpu_descriptor_handle.hw_handle.ptr as usize);
+
+        command_list.set_descriptor_heaps(std::slice::from_ref(&self.descriptor_heap));
         command_list.set_graphics_root_descriptor_table(1, self.font_tex_gpu_descriptor_handle);
 
         for draw_list in draw_data.draw_lists() {

@@ -343,8 +343,8 @@ impl WinitSample {
                     .with_state_after(ResourceStates::RenderTarget),
             )));
 
-        self.command_list
-            .set_descriptor_heaps(slice::from_ref(&self.srv_uav_heap));
+        // self.command_list
+        //     .set_descriptor_heaps(slice::from_ref(&self.srv_uav_heap));
 
         self.command_list.clear_render_target_view(
             self.rtv_heap
@@ -478,8 +478,8 @@ fn main() {
         &mut imgui,
         app.device.clone(),
         FRAMES_IN_FLIGHT,
-        app.srv_uav_heap.get_cpu_descriptor_handle_for_heap_start(),
-        app.srv_uav_heap.get_gpu_descriptor_handle_for_heap_start(),
+        app.srv_uav_heap.clone(),
+        0,
     )
     .expect("Cannot create renderer");
 
