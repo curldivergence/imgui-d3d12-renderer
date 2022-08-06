@@ -353,13 +353,6 @@ impl WinitSample {
             [1., 0.3, 0.3, 1.],
             &[],
         );
-
-        let rtv_handles = [self
-            .rtv_heap
-            .get_cpu_descriptor_handle_for_heap_start()
-            .advance(self.frame_index as u32, self.rtv_descriptor_handle_size)];
-        self.command_list
-            .set_render_targets(&rtv_handles, false, None);
     }
 
     fn submit_commands(&mut self) {
@@ -517,7 +510,16 @@ fn main() {
                 });
             ui.show_demo_window(&mut true);
             platform.prepare_render(&ui, &window);
-            renderer.render(ui.render(), &app.command_list).unwrap();
+
+            renderer
+                .render(
+                    ui.render(),
+                    &app.command_list,
+                    app.rtv_heap
+                        .get_cpu_descriptor_handle_for_heap_start()
+                        .advance(app.frame_index as u32, app.rtv_descriptor_handle_size),
+                )
+                .unwrap();
 
             app.submit_commands();
             app.present();

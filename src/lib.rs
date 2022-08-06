@@ -111,11 +111,7 @@ fn create_pipeline_state(
         .with_root_signature(root_signature)
         .with_vs_bytecode(&vs_bytecode)
         .with_ps_bytecode(&ps_bytecode)
-        .with_rasterizer_state(
-            RasterizerDesc::default()
-                .with_fill_mode(FillMode::Solid)
-                .with_depth_clip_enable(true),
-        )
+        .with_rasterizer_state(RasterizerDesc::default())
         .with_blend_state(
             BlendDesc::default().with_render_targets(&[RenderTargetBlendDesc::default()
                 .with_blend_enable(true)
@@ -127,10 +123,9 @@ fn create_pipeline_state(
                 .with_blend_op_alpha(BlendOp::Add)
                 .with_render_target_write_mask(ColorWriteEnable::EnableAll)]),
         )
-        .with_depth_stencil_state(DepthStencilDesc::default())
+        .with_depth_stencil_state(DepthStencilDesc::default().with_depth_enable(false))
         .with_primitive_topology_type(PrimitiveTopologyType::Triangle)
-        .with_rtv_formats(&[Format::R8G8B8A8Unorm])
-        .with_dsv_format(Format::D32Float);
+        .with_rtv_formats(&[Format::R8G8B8A8Unorm]);
 
     device
         .create_graphics_pipeline_state(&pso_desc)
@@ -516,7 +511,12 @@ impl Renderer {
         &self.textures
     }
 
-    pub fn render(&mut self, draw_data: &DrawData, command_list: &CommandList) -> IDRResult<()> {
+    pub fn render(
+        &mut self,
+        draw_data: &DrawData,
+        command_list: &CommandList,
+        render_target: CpuDescriptorHandle,
+    ) -> IDRResult<()> {
         if draw_data.display_size[0] <= 0.0 || draw_data.display_size[1] <= 0.0 {
             return Ok(());
         }
@@ -536,7 +536,7 @@ impl Renderer {
         // let _state_guard = StateBackup::backup(&self.context);
 
         self.update_buffers(draw_data, command_list)?;
-        self.setup_render_state(draw_data, command_list);
+        self.setup_render_state(draw_data, command_list, render_target);
         self.render_impl(draw_data, command_list)?;
 
         self.current_frame_index = (self.current_frame_index + 1) % self.frame_count;
@@ -554,9 +554,6 @@ impl Renderer {
 
         let mut last_tex =
             TextureId::from(self.font_tex_gpu_descriptor_handle.hw_handle.ptr as usize);
-
-        command_list.set_descriptor_heaps(std::slice::from_ref(&self.descriptor_heap));
-        command_list.set_graphics_root_descriptor_table(1, self.font_tex_gpu_descriptor_handle);
 
         for draw_list in draw_data.draw_lists() {
             for cmd in draw_list.commands() {
@@ -610,7 +607,12 @@ impl Renderer {
         Ok(())
     }
 
-    fn setup_render_state(&self, draw_data: &DrawData, command_list: &CommandList) {
+    fn setup_render_state(
+        &self,
+        draw_data: &DrawData,
+        command_list: &CommandList,
+        render_targets: CpuDescriptorHandle,
+    ) {
         trace!("setup_render_state call");
 
         let current_resources = &self.frame_resources[self.current_frame_index];
@@ -649,13 +651,16 @@ impl Renderer {
             )
         };
 
-        command_list.set_graphics_root_signature(&self.root_signature);
+        command_list.set_descriptor_heaps(std::slice::from_ref(&self.descriptor_heap));
 
+        command_list.set_graphics_root_signature(&self.root_signature);
         command_list.set_graphics_root_32bit_constants(0, data_view, 0);
+        command_list.set_graphics_root_descriptor_table(1, self.font_tex_gpu_descriptor_handle);
 
         command_list.set_pipeline_state(&self.pipeline_state);
-
         command_list.set_blend_factor([0., 0., 0., 0.]);
+
+        command_list.set_render_targets(&[render_targets], false, None);
     }
 
     fn update_buffers(&self, draw_data: &DrawData, command_list: &CommandList) -> IDRResult<()> {
