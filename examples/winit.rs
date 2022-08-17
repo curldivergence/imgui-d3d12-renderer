@@ -110,8 +110,8 @@ fn create_swapchain(
     hwnd: *mut std::ffi::c_void,
 ) -> Swapchain {
     let swapchain_desc = SwapChainDesc::default()
-        .with_width(WINDOW_WIDTH)
-        .with_height(WINDOW_HEIGHT)
+        .with_width(0)
+        .with_height(0)
         .with_buffer_count(FRAMES_IN_FLIGHT as u32);
 
     let swapchain = unsafe {
